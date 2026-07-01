@@ -1,16 +1,24 @@
 package com.eblansoft.flashlight2.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,25 +38,26 @@ import androidx.compose.ui.unit.sp
 import com.eblansoft.flashlight2.GameState
 import kotlinx.coroutines.delay
 
-/** "You're out of free turn-offs" prompt: watch an ad or go Premium. */
+/** Out-of-quota prompt (for turn-ON or turn-OFF): ad, top-up or Premium. */
 @Composable
 fun OutOfQuotaDialog(state: GameState) {
-    if (!state.showOutOfQuota) return
+    val kind = state.outOfQuotaKind ?: return
+    val action = if (kind == "on") "включений" else "выключений"
     AlertDialog(
         onDismissRequest = { state.dismissOutOfQuota() },
-        title = { Text("Лимит выключений исчерпан") },
+        title = { Text("Лимит $action исчерпан") },
         text = {
             Text(
-                "Сегодня вы уже выключили свет ${GameState.DAILY_FREE_TURN_OFFS} раз.\n\n" +
-                    "Посмотрите рекламу, чтобы получить ещё одно выключение, " +
-                    "или оформите Premium для безлимита."
+                "На эти ${GameState.WINDOW_HOURS} часов лимит $action закончился.\n\n" +
+                    "Посмотрите рекламу (+1), докупите лимиты в Настройках → Billing " +
+                    "или оформите подписку для безлимита."
             )
         },
         confirmButton = {
-            Button(onClick = { state.startAd() }) { Text("Смотреть рекламу (+1)") }
+            Button(onClick = { state.startAd() }) { Text("Реклама (+1)") }
         },
         dismissButton = {
-            TextButton(onClick = { state.openPaywallFromQuota() }) { Text("Premium ∞") }
+            TextButton(onClick = { state.openPaywallFromQuota() }) { Text("Подписка ∞") }
         },
     )
 }
@@ -102,12 +111,64 @@ fun AdOverlay(state: GameState) {
                 )
             } else {
                 Button(onClick = { state.onAdFinished() }) {
-                    Text("Забрать +1 выключение")
+                    Text("Забрать награду (+1)")
                 }
             }
             Spacer(Modifier.height(12.dp))
             TextButton(onClick = { state.dismissAd() }) {
                 Text("Закрыть", color = Color(0xFF6A6A7A))
+            }
+        }
+    }
+}
+
+/** Claude-style in-app notification banner that slides in from the top. */
+@Composable
+fun NotificationBanner(state: GameState) {
+    val note = state.currentNotification
+
+    LaunchedEffect(note) {
+        if (note != null) {
+            delay(3800)
+            state.dismissNotification()
+        }
+    }
+
+    Box(Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.TopCenter) {
+        AnimatedVisibility(
+            visible = note != null,
+            enter = slideInVertically { -it },
+            exit = slideOutVertically { -it },
+        ) {
+            if (note != null) {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF23232E)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { state.dismissNotification() },
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(note.emoji, fontSize = 22.sp)
+                        Spacer(Modifier.padding(start = 6.dp))
+                        Column(Modifier.padding(start = 6.dp)) {
+                            Text(
+                                note.title,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                            )
+                            Text(
+                                note.body,
+                                color = Color(0xFFC7C7D2),
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

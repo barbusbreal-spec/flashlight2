@@ -1,6 +1,12 @@
 package com.eblansoft.flashlight2.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,16 +21,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -34,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -44,10 +54,12 @@ import com.eblansoft.flashlight2.Screen
 
 @Composable
 fun FlashlightScreen(state: GameState) {
+    val lightColor = if (state.colorRgbMode) rainbowColor() else state.currentColor
+
     // In screen-light mode with the light on, the whole screen becomes the lamp.
     val screenIsLamp = state.screenLightMode && state.lightOn
     val bg by animateColorAsState(
-        targetValue = if (screenIsLamp) state.currentColor else MaterialTheme.colorScheme.background,
+        targetValue = if (screenIsLamp) lightColor else MaterialTheme.colorScheme.background,
         label = "bg",
     )
 
@@ -68,10 +80,14 @@ fun FlashlightScreen(state: GameState) {
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentAlignment = Alignment.Center,
             ) {
-                PowerButton(state, dimmed = screenIsLamp)
+                PowerButton(state, lightColor, dimmed = screenIsLamp)
             }
 
             if (!screenIsLamp) {
+                if (state.secretButtonUnlocked) {
+                    SecretButton(state)
+                    Spacer(Modifier.height(10.dp))
+                }
                 ColorPicker(state)
                 Spacer(Modifier.height(12.dp))
                 ModeAndStoryRow(state)
@@ -83,13 +99,28 @@ fun FlashlightScreen(state: GameState) {
 }
 
 @Composable
+private fun rainbowColor(): Color {
+    val transition = rememberInfiniteTransition(label = "rgb")
+    val hue by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "hue",
+    )
+    return Color.hsv(hue, 1f, 1f)
+}
+
+@Composable
 private fun Header(state: GameState) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(
                 "Фонарик 2 Ultimate",
                 fontWeight = FontWeight.Bold,
@@ -108,7 +139,7 @@ private fun Header(state: GameState) {
                 shape = RoundedCornerShape(50),
             ) {
                 Text(
-                    "PREMIUM 👑",
+                    state.tierBadge,
                     color = MaterialTheme.colorScheme.onPrimary,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp,
@@ -118,12 +149,23 @@ private fun Header(state: GameState) {
         } else {
             Button(onClick = { state.navigate(Screen.PREMIUM) }) { Text("Premium") }
         }
+        IconButton(onClick = { state.navigate(Screen.SETTINGS) }) {
+            Icon(
+                Icons.Filled.Settings,
+                contentDescription = "Настройки",
+                tint = MaterialTheme.colorScheme.onBackground,
+            )
+        }
     }
 }
 
 @Composable
 private fun QuotaBanner(state: GameState) {
-    val remaining = state.turnOffsRemaining
+    val onText = if (state.onUnlimited) "∞" else state.onRemaining.toString()
+    val offText = if (state.offUnlimited) "∞" else state.offRemaining.toString()
+    val outOfOn = !state.onUnlimited && state.onRemaining == 0
+    val outOfOff = !state.offUnlimited && state.offRemaining == 0
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -131,36 +173,64 @@ private fun QuotaBanner(state: GameState) {
         ),
     ) {
         Column(Modifier.padding(14.dp)) {
-            if (state.isUnlimited) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 Text(
-                    "Выключений сегодня: ∞ (спасибо за подписку)",
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            } else {
-                Text(
-                    "Осталось бесплатных выключений: $remaining / ${GameState.DAILY_FREE_TURN_OFFS}",
-                    color = if (remaining == 0) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurface,
+                    "🔦 Включений: $onText",
+                    color = if (outOfOn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    "Включать свет — бесплатно. Выключать — по лимиту.",
+                    "🌙 Выключений: $offText",
+                    color = if (outOfOff) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Text(
+                "Лимиты за ${GameState.WINDOW_HOURS} ч · сброс через ${formatDuration(state.windowResetInMs)}",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (state.boughtOnCredits > 0 || state.boughtOffCredits > 0) {
+                Text(
+                    "Докуплено: +${state.boughtOnCredits} вкл / +${state.boughtOffCredits} выкл",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
         }
     }
 }
 
+internal fun formatDuration(ms: Long): String {
+    val totalMin = ms / 60000L
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return if (h > 0) "$h ч $m мин" else "$m мин"
+}
+
 @Composable
-private fun PowerButton(state: GameState, dimmed: Boolean) {
+private fun SecretButton(state: GameState) {
+    Button(
+        onClick = { state.pressSecret() },
+        modifier = Modifier.fillMaxWidth().height(52.dp),
+    ) {
+        Icon(Icons.Filled.Bolt, contentDescription = null)
+        Spacer(Modifier.size(8.dp))
+        Text("СВЕТИТЬ СИЛЬНЕЕ", fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun PowerButton(state: GameState, lightColor: Color, dimmed: Boolean) {
     val on = state.lightOn
-    val ringColor = if (on) state.currentColor else MaterialTheme.colorScheme.surfaceVariant
+    val ringColor = if (on) lightColor else MaterialTheme.colorScheme.surfaceVariant
     val iconTint = when {
         dimmed -> Color.Black.copy(alpha = 0.35f)
-        on -> state.currentColor
+        on -> lightColor
         else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
     }
     Box(
@@ -203,9 +273,8 @@ private fun ColorPicker(state: GameState) {
             modifier = Modifier.padding(bottom = 6.dp),
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(GameState.PALETTE) { c ->
-                val index = GameState.PALETTE.indexOf(c)
-                val selected = index == state.colorIndex
+            itemsIndexed(GameState.PALETTE) { index, c ->
+                val selected = index == state.colorIndex && !state.colorRgbMode
                 val locked = c.premiumOnly && !state.premium
                 Box(
                     modifier = Modifier
@@ -225,6 +294,38 @@ private fun ColorPicker(state: GameState) {
                         Icon(
                             Icons.Filled.Lock,
                             contentDescription = "Premium",
+                            tint = Color.Black.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
+            item {
+                // RGB (Premium+) rainbow chip.
+                val rainbow = Brush.sweepGradient(
+                    listOf(
+                        Color.Red, Color.Yellow, Color.Green,
+                        Color.Cyan, Color.Blue, Color.Magenta, Color.Red,
+                    )
+                )
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(rainbow)
+                        .border(
+                            width = if (state.colorRgbMode) 3.dp else 1.dp,
+                            color = if (state.colorRgbMode) MaterialTheme.colorScheme.primary
+                            else Color.White.copy(alpha = 0.25f),
+                            shape = CircleShape,
+                        )
+                        .clickable { state.toggleRgb() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (!state.rgbUnlocked) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = "Premium+",
                             tint = Color.Black.copy(alpha = 0.6f),
                             modifier = Modifier.size(20.dp),
                         )

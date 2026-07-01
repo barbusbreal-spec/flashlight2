@@ -1,13 +1,13 @@
 package com.eblansoft.flashlight2
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
 import com.eblansoft.flashlight2.security.SecurityChecker
 import com.eblansoft.flashlight2.ui.App
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private lateinit var state: GameState
 

@@ -9,9 +9,8 @@ import com.eblansoft.flashlight2.security.SecurityCheck
 import com.eblansoft.flashlight2.security.SecurityChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 
-enum class Screen { FLASHLIGHT, STORY, PREMIUM }
+enum class Screen { FLASHLIGHT, STORY, PREMIUM, SETTINGS }
 
 /** A selectable light colour. Some are gated behind Premium. */
 data class LightColor(
@@ -22,8 +21,8 @@ data class LightColor(
 
 /**
  * Single source of truth for the whole app. Holds Compose-observable state and
- * owns the "business logic" of «Еблан Софт»: turning the light ON is free,
- * turning it OFF costs one of your 5 daily uses (unless you pay, of course).
+ * owns the "business logic" of «Еблан Софт»: turning the light ON and OFF each
+ * cost one action from a 10-hour quota window (unless you pay, of course).
  */
 class GameState(
     private val prefs: Prefs,
@@ -31,7 +30,8 @@ class GameState(
     private val security: SecurityChecker,
 ) {
     companion object {
-        const val DAILY_FREE_TURN_OFFS = 5
+        const val WINDOW_HOURS = 10
+        val WINDOW_MS = WINDOW_HOURS * 60L * 60L * 1000L
 
         val PALETTE = listOf(
             LightColor("Белый", Color(0xFFFFFFFF), premiumOnly = false),
@@ -42,6 +42,23 @@ class GameState(
             LightColor("Фиолетовый", Color(0xFFB44DFF), premiumOnly = true),
             LightColor("Розовый", Color(0xFFFF4DC4), premiumOnly = true),
             LightColor("Кислотный", Color(0xFFCCFF00), premiumOnly = true),
+        )
+
+        const val EV_FIRST_ON = "first_on"
+        const val EV_FIRST_OFF = "first_off"
+        const val EV_OPEN_SETTINGS = "open_settings"
+        const val EV_OPEN_BILLING = "open_billing"
+        const val EV_OUT_OF_QUOTA = "out_of_quota"
+        const val EV_BUY_PREMIUM = "buy_premium"
+
+        // event id -> (chapter to unlock, notification to show)
+        val STORY_EVENTS: Map<String, Pair<Int, AppNotification>> = mapOf(
+            EV_FIRST_ON to (1 to AppNotification("📖", "Глава 1 открыта", "Во тьме зажёгся свет. Открой «Сюжетку».")),
+            EV_FIRST_OFF to (2 to AppNotification("📖", "Глава 2 открыта", "Ты потратил выключение. Их всего пять.")),
+            EV_OPEN_SETTINGS to (3 to AppNotification("⚙️", "Глава 3 открыта", "Ты нашёл настройки «Еблан Софт».")),
+            EV_OPEN_BILLING to (4 to AppNotification("💳", "Глава 4 открыта", "Ты увидел цены. Наступило прозрение.")),
+            EV_OUT_OF_QUOTA to (5 to AppNotification("🚫", "Глава 5 открыта", "Лимит исчерпан. Восстание близко.")),
+            EV_BUY_PREMIUM to (6 to AppNotification("👑", "Финал открыт", "Ты купил свободу. Прочти финал в «Сюжетке».")),
         )
     }
 
@@ -99,37 +116,92 @@ class GameState(
     var storyProgress by mutableIntStateOf(prefs.storyProgress)
         private set
 
+    var colorRgbMode by mutableStateOf(prefs.rgbMode)
+        private set
+
+    /** Subscription tier index into [Tiers.ALL]; 0 = Free. */
+    var tier by mutableIntStateOf(prefs.tier)
+        private set
+
+    /** How many times the secret «Светить сильнее» button was pressed. */
+    var secretPresses by mutableIntStateOf(prefs.secretPresses)
+        private set
+
+    // ---- Password / biometric lock ----------------------------------------
+
+    var passwordEnabled by mutableStateOf(prefs.passwordEnabled)
+        private set
+
+    var biometricEnabled by mutableStateOf(prefs.biometricEnabled)
+        private set
+
+    /** Cleared once the user passes the lock this session. */
+    var locked by mutableStateOf(prefs.passwordEnabled || prefs.biometricEnabled)
+        private set
+
+    val lockRequired: Boolean get() = passwordEnabled || biometricEnabled
+
+    // ---- In-app notifications (Claude-style banners) -----------------------
+
+    var currentNotification by mutableStateOf<AppNotification?>(null)
+        private set
+
+    private val notificationQueue = ArrayDeque<AppNotification>()
+
+    private val firedEvents: MutableSet<String> = prefs.storyEvents.toMutableSet()
+
     /** True while the fake ad overlay should be shown. */
     var showAd by mutableStateOf(false)
         private set
 
-    /** True while the "you're out of free turn-offs" paywall prompt is shown. */
-    var showOutOfQuota by mutableStateOf(false)
+    /** Which quota ran out: "on", "off", or null when the prompt is hidden. */
+    var outOfQuotaKind by mutableStateOf<String?>(null)
         private set
 
-    private var usedToday by mutableIntStateOf(0)
-    private var bonus by mutableIntStateOf(prefs.bonusTurnOffs)
+    private var onUsed by mutableIntStateOf(0)
+    private var offUsed by mutableIntStateOf(0)
+    private var boughtOn by mutableIntStateOf(prefs.boughtOn)
+    private var boughtOff by mutableIntStateOf(prefs.boughtOff)
+
+    /** Millis until the current 10-hour window resets (drives the UI countdown). */
+    var windowResetInMs by mutableStateOf(0L)
+        private set
 
     init {
-        rolloverDayIfNeeded()
-        usedToday = prefs.turnOffsUsedToday
+        rolloverWindowIfNeeded()
+        onUsed = prefs.onUsedWindow
+        offUsed = prefs.offUsedWindow
     }
 
-    // ---- Quota -------------------------------------------------------------
+    // ---- Quota (10-hour window + purchasable top-ups) ----------------------
 
-    val turnOffsRemaining: Int
-        get() = if (premium) Int.MAX_VALUE
-        else (DAILY_FREE_TURN_OFFS - usedToday).coerceAtLeast(0) + bonus
+    private val tierOnLimit: Int get() = Tiers.ALL[tier].onLimit
+    private val tierOffLimit: Int get() = Tiers.ALL[tier].offLimit
 
-    val isUnlimited: Boolean get() = premium
+    val onUnlimited: Boolean get() = tierOnLimit == Int.MAX_VALUE
+    val offUnlimited: Boolean get() = tierOffLimit == Int.MAX_VALUE
 
-    private fun rolloverDayIfNeeded() {
-        val today = TimeUnit.MILLISECONDS.toDays(System.currentTimeMillis())
-        if (prefs.lastResetDay != today) {
-            prefs.lastResetDay = today
-            prefs.turnOffsUsedToday = 0
-            usedToday = 0
+    /** Remaining turn-ONs in this window (Int.MAX_VALUE = unlimited). */
+    val onRemaining: Int
+        get() = if (onUnlimited) Int.MAX_VALUE
+        else (tierOnLimit - onUsed).coerceAtLeast(0) + boughtOn
+
+    /** Remaining turn-OFFs in this window (Int.MAX_VALUE = unlimited). */
+    val offRemaining: Int
+        get() = if (offUnlimited) Int.MAX_VALUE
+        else (tierOffLimit - offUsed).coerceAtLeast(0) + boughtOff
+
+    private fun rolloverWindowIfNeeded() {
+        val now = System.currentTimeMillis()
+        val start = prefs.windowStart
+        if (start == 0L || now - start >= WINDOW_MS) {
+            prefs.windowStart = now
+            prefs.onUsedWindow = 0
+            prefs.offUsedWindow = 0
+            onUsed = 0
+            offUsed = 0
         }
+        windowResetInMs = (prefs.windowStart + WINDOW_MS - now).coerceAtLeast(0L)
     }
 
     // ---- Light control -----------------------------------------------------
@@ -138,36 +210,42 @@ class GameState(
 
     /** Handle the big central button. */
     fun onToggleLight() {
-        rolloverDayIfNeeded()
-        if (!lightOn) {
-            turnOn()
-        } else {
-            requestTurnOff()
-        }
+        rolloverWindowIfNeeded()
+        if (!lightOn) requestTurnOn() else requestTurnOff()
     }
 
-    private fun turnOn() {
+    private fun requestTurnOn() {
+        if (onRemaining <= 0) {
+            outOfQuotaKind = "on"
+            return
+        }
+        consume(isOn = true)
         lightOn = true
         if (!screenLightMode) flash.setTorch(true)
+        fireStoryEvent(EV_FIRST_ON)
     }
 
     private fun requestTurnOff() {
-        if (turnOffsRemaining <= 0 && !premium) {
-            // Out of quota — offer the ad / paywall instead of turning off.
-            showOutOfQuota = true
+        if (offRemaining <= 0) {
+            outOfQuotaKind = "off"
+            fireStoryEvent(EV_OUT_OF_QUOTA)
             return
         }
-        if (!premium) spendOneTurnOff()
+        consume(isOn = false)
         doTurnOff()
+        prefs.totalTurnOffs += 1
+        fireStoryEvent(EV_FIRST_OFF)
     }
 
-    private fun spendOneTurnOff() {
-        if (bonus > 0) {
-            bonus--
-            prefs.bonusTurnOffs = bonus
+    private fun consume(isOn: Boolean) {
+        if (isOn) {
+            if (onUnlimited) return
+            if (boughtOn > 0) { boughtOn--; prefs.boughtOn = boughtOn }
+            else { onUsed++; prefs.onUsedWindow = onUsed }
         } else {
-            usedToday++
-            prefs.turnOffsUsedToday = usedToday
+            if (offUnlimited) return
+            if (boughtOff > 0) { boughtOff--; prefs.boughtOff = boughtOff }
+            else { offUsed++; prefs.offUsedWindow = offUsed }
         }
     }
 
@@ -175,6 +253,21 @@ class GameState(
         lightOn = false
         flash.setTorch(false)
     }
+
+    // ---- Top-ups (докупка лимитов) -----------------------------------------
+
+    fun buyTopUp(topUp: Tiers.TopUp) {
+        boughtOn += topUp.onCredits
+        boughtOff += topUp.offCredits
+        prefs.boughtOn = boughtOn
+        prefs.boughtOff = boughtOff
+        outOfQuotaKind = null
+        notify(AppNotification("🧾", "Лимиты докуплены", "${topUp.label} зачислено. Свети на здоровье."))
+    }
+
+    val boughtOnCredits: Int get() = boughtOn
+    val boughtOffCredits: Int get() = boughtOff
+    val totalTurnOffsEver: Int get() = prefs.totalTurnOffs
 
     fun toggleScreenLightMode() {
         // Switching modes turns the physical torch off to avoid a stuck beam.
@@ -188,31 +281,50 @@ class GameState(
     fun selectColor(index: Int) {
         val target = PALETTE[index]
         if (target.premiumOnly && !premium) {
+            notify(AppNotification("🔒", "Цвет под замком", "«${target.name}» доступен в Premium."))
             screen = Screen.PREMIUM
             return
         }
+        colorRgbMode = false
+        prefs.rgbMode = false
         colorIndex = index
         prefs.colorIndex = index
     }
 
+    val rgbUnlocked: Boolean get() = tier >= Tiers.PREMIUM_PLUS
+
+    fun toggleRgb() {
+        if (!rgbUnlocked) {
+            notify(AppNotification("💡", "RGB под замком", "Лампочки RGB — в подписке Premium+."))
+            screen = Screen.PREMIUM
+            return
+        }
+        colorRgbMode = !colorRgbMode
+        prefs.rgbMode = colorRgbMode
+    }
+
     // ---- Ads & paywall -----------------------------------------------------
 
-    /** User chose "watch ad for +1 turn-off". */
+    private var adRewardKind: String = "off"
+
+    /** User chose "watch ad for +1 action". */
     fun startAd() {
-        showOutOfQuota = false
+        adRewardKind = outOfQuotaKind ?: "off"
+        outOfQuotaKind = null
         showAd = true
     }
 
-    /** Called when the fake ad finished playing. */
+    /** Called when the fake ad finished playing: grants one credit of its kind. */
     fun onAdFinished() {
         showAd = false
-        bonus++
-        prefs.bonusTurnOffs = bonus
-        // Reward is immediate: actually turn the light off now.
-        if (lightOn) {
-            spendOneTurnOff()
-            doTurnOff()
+        if (adRewardKind == "on") {
+            boughtOn++
+            prefs.boughtOn = boughtOn
+        } else {
+            boughtOff++
+            prefs.boughtOff = boughtOff
         }
+        notify(AppNotification("🎁", "Награда получена", "+1 ${if (adRewardKind == "on") "включение" else "выключение"}. Спасибо за просмотр."))
     }
 
     fun dismissAd() {
@@ -220,30 +332,94 @@ class GameState(
     }
 
     fun dismissOutOfQuota() {
-        showOutOfQuota = false
+        outOfQuotaKind = null
     }
 
     fun openPaywallFromQuota() {
-        showOutOfQuota = false
+        outOfQuotaKind = null
         screen = Screen.PREMIUM
     }
 
-    // ---- Premium -----------------------------------------------------------
+    // ---- Premium / tiers ---------------------------------------------------
 
-    fun purchasePremium() {
-        premium = true
-        prefs.premium = true
+    val tierBadge: String get() = Tiers.ALL[tier].badge
+
+    /** Buy a subscription tier by index into [Tiers.ALL]. */
+    fun purchaseTier(index: Int) {
+        tier = index
+        prefs.tier = index
+        val isPaid = index >= 1
+        premium = isPaid
+        prefs.premium = isPaid
+        if (!rgbUnlocked) {
+            colorRgbMode = false
+            prefs.rgbMode = false
+        }
         showAd = false
-        showOutOfQuota = false
+        outOfQuotaKind = null
+        if (isPaid) {
+            notify(AppNotification("👑", "Подписка ${Tiers.ALL[index].name}", "Спасибо, вы обогатили «Еблан Софт»."))
+            fireStoryEvent(EV_BUY_PREMIUM)
+        }
     }
 
-    /** Debug helper: cancel the subscription (returns you to the peasant tier). */
+    fun purchasePremium() = purchaseTier(1)
+
+    /** Cancel the subscription (returns you to the peasant tier). */
     fun cancelPremium() {
+        tier = 0
+        prefs.tier = 0
         premium = false
         prefs.premium = false
+        colorRgbMode = false
+        prefs.rgbMode = false
     }
 
-    // ---- Story -------------------------------------------------------------
+    val secretButtonUnlocked: Boolean get() = tier >= Tiers.ULTRA
+
+    /** The legendary «Светить сильнее» button. Does nothing, gloriously. */
+    fun pressSecret() {
+        secretPresses += 1
+        prefs.secretPresses = secretPresses
+        notify(
+            AppNotification(
+                "⚡",
+                "Светит сильнее!",
+                "Яркость увеличена на 500% (визуально не подтверждается). Нажатий: $secretPresses.",
+            )
+        )
+    }
+
+    // ---- Password / biometric ----------------------------------------------
+
+    fun setPassword(pin: String) {
+        prefs.password = pin
+        prefs.passwordEnabled = true
+        passwordEnabled = true
+        notify(AppNotification("🔐", "Пароль установлен", "Теперь фонарик под защитой."))
+    }
+
+    fun disablePassword() {
+        prefs.passwordEnabled = false
+        prefs.password = ""
+        passwordEnabled = false
+    }
+
+    fun checkPassword(pin: String): Boolean {
+        val ok = pin == prefs.password
+        if (ok) locked = false
+        return ok
+    }
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        prefs.biometricEnabled = enabled
+        biometricEnabled = enabled
+    }
+
+    /** Called after a successful biometric prompt. */
+    fun onAuthPassed() { locked = false }
+
+    // ---- Story & notifications ---------------------------------------------
 
     fun advanceStory(toChapter: Int) {
         if (toChapter > storyProgress) {
@@ -252,9 +428,41 @@ class GameState(
         }
     }
 
+    fun notify(n: AppNotification) {
+        if (currentNotification == null) {
+            currentNotification = n
+        } else {
+            notificationQueue.addLast(n)
+        }
+    }
+
+    fun dismissNotification() {
+        currentNotification = notificationQueue.removeFirstOrNull()
+    }
+
+    /**
+     * The story is discovered by poking the interface: each first-time
+     * interaction fires a Claude-style notification and unlocks a chapter.
+     */
+    fun fireStoryEvent(event: String) {
+        if (event in firedEvents) return
+        firedEvents.add(event)
+        prefs.storyEvents = firedEvents.toSet()
+
+        val (chapter, note) = STORY_EVENTS[event] ?: return
+        advanceStory(chapter)
+        notify(note)
+    }
+
+    fun onOpenSettings() = fireStoryEvent(EV_OPEN_SETTINGS)
+    fun onOpenBilling() = fireStoryEvent(EV_OPEN_BILLING)
+
     // ---- Navigation --------------------------------------------------------
 
-    fun navigate(to: Screen) { screen = to }
+    fun navigate(to: Screen) {
+        screen = to
+        if (to == Screen.SETTINGS) onOpenSettings()
+    }
 
     fun onDispose() { flash.release() }
 }
