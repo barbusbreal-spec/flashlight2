@@ -111,7 +111,7 @@ object Tiers {
     )
 
     const val PREMIUM_PLUS = 3
-    const val ULTRA = 6
+    const val ULTRA = 5
 
     /** Buyable top-up packs (докупка лимитов). */
     data class TopUp(val label: String, val price: String, val onCredits: Int, val offCredits: Int)
