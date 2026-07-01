@@ -205,7 +205,7 @@ private fun PrivacyTab(state: GameState) {
                 title = "Биометрия (отпечаток)",
                 subtitle = "Разблокировка фонарика по отпечатку / лицу",
                 checked = state.biometricEnabled,
-                onChange = { on -> state.setBiometricEnabled(on) },
+                onChange = { on -> state.toggleBiometric(on) },
             )
             val available = activity != null && BiometricAuth.isAvailable(activity)
             if (!available) {

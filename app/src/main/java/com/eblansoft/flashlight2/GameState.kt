@@ -411,7 +411,7 @@ class GameState(
         return ok
     }
 
-    fun setBiometricEnabled(enabled: Boolean) {
+    fun toggleBiometric(enabled: Boolean) {
         prefs.biometricEnabled = enabled
         biometricEnabled = enabled
     }

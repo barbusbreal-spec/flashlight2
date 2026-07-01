@@ -84,6 +84,35 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_BIOMETRIC, false)
         set(v) = sp.edit().putBoolean(KEY_BIOMETRIC, v).apply()
 
+    // ---- DEP ID (OAuth) ----------------------------------------------------
+
+    var depAccessToken: String
+        get() = sp.getString(KEY_DEP_ACCESS, "") ?: ""
+        set(v) = sp.edit().putString(KEY_DEP_ACCESS, v).apply()
+
+    var depRefreshToken: String
+        get() = sp.getString(KEY_DEP_REFRESH, "") ?: ""
+        set(v) = sp.edit().putString(KEY_DEP_REFRESH, v).apply()
+
+    /** Epoch millis when the access token expires. */
+    var depExpiresAt: Long
+        get() = sp.getLong(KEY_DEP_EXPIRES, 0L)
+        set(v) = sp.edit().putLong(KEY_DEP_EXPIRES, v).apply()
+
+    /** Pending OAuth CSRF state, checked on the redirect callback. */
+    var depOauthState: String
+        get() = sp.getString(KEY_DEP_STATE, "") ?: ""
+        set(v) = sp.edit().putString(KEY_DEP_STATE, v).apply()
+
+    fun clearDep() {
+        sp.edit()
+            .remove(KEY_DEP_ACCESS)
+            .remove(KEY_DEP_REFRESH)
+            .remove(KEY_DEP_EXPIRES)
+            .remove(KEY_DEP_STATE)
+            .apply()
+    }
+
     companion object {
         private const val KEY_PREMIUM = "premium"
         private const val KEY_TIER = "tier"
@@ -101,5 +130,9 @@ class Prefs(context: Context) {
         private const val KEY_PW_ON = "password_enabled"
         private const val KEY_PW = "password"
         private const val KEY_BIOMETRIC = "biometric_enabled"
+        private const val KEY_DEP_ACCESS = "dep_access_token"
+        private const val KEY_DEP_REFRESH = "dep_refresh_token"
+        private const val KEY_DEP_EXPIRES = "dep_expires_at"
+        private const val KEY_DEP_STATE = "dep_oauth_state"
     }
 }
