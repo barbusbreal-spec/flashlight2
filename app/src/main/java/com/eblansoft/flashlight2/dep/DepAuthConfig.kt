@@ -21,9 +21,8 @@ object DepAuthConfig {
     /** Custom-scheme deep link DEP ID redirects back to after authorization. */
     const val REDIRECT_URI = "flashlight://auth/callback"
 
-    // TODO: fill these after registering the service in DEP ID.
-    const val CLIENT_ID = ""
-    const val CLIENT_SECRET = ""
+    const val CLIENT_ID = "dep_87baeb24db5bf933d5ba11ab"
+    const val CLIENT_SECRET = "6d9490163c4babfcd2ccc40eb09f49e17bdf6150a13748ccafbdc72fff8f1bd8"
 
     val isConfigured: Boolean get() = CLIENT_ID.isNotBlank() && CLIENT_SECRET.isNotBlank()
 }
