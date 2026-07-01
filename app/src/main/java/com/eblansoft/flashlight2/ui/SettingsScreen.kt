@@ -157,12 +157,6 @@ private fun RailItem(tab: SettingsTab, selected: Boolean, onClick: () -> Unit) {
 private fun AccountTab(state: GameState, goBilling: () -> Unit) {
     ScrollColumn {
         SectionTitle("Аккаунт")
-        InfoCard {
-            KeyValue("Пользователь", "гость@еблансофт.рф")
-            KeyValue("Тарифный план", Tiers.ALL[state.tier].name)
-            KeyValue("Статус", if (state.premium) "Активна подписка" else "Бесплатный пользователь")
-            KeyValue("В семье «Еблан Софт»", "с 2026 года")
-        }
         Spacer(Modifier.height(12.dp))
         Button(onClick = goBilling, modifier = Modifier.fillMaxWidth()) {
             Text("Управление подпиской")
@@ -454,8 +448,8 @@ private fun BillingTab(state: GameState) {
             }
         }
         Text(
-            "* все платежи ненастоящие, деньги воображаемые",
-            fontSize = 10.sp,
+            "*вы продаете душу нам за 5 тенге",
+            fontSize = 1.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
             modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
         )
