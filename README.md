@@ -22,6 +22,12 @@
 - **🔐 Пароль и биометрия (Privacy)** — PIN на запуск фонарика и разблокировка
   по отпечатку/лицу (`androidx.biometric`).
 - **🔔 Уведомления** — всплывающие баннеры в стиле Claude ведут по сюжету.
+- **🔑 Вход через DEP ID (OAuth2)** — авторизация в Account через DEP API v1:
+  профиль, друзья, DepCoins и мини-казино («крутить слоты») прямо в приложении.
+  Редирект настроен на `flashlight://auth/callback` deep link.
+- **🔗 Диплинки `flashlight://open/<...>`** — открывают нужное меню
+  (`privacy`, `billing`, `usage`, `settings`/`account`, `casino`, `story`,
+  `premium`) сразу из ссылки, без похода по интерфейсу.
 - **📺 Реклама** — закончился лимит? Посмотри «рекламу» (30… ладно, 5 секунд
   капсул для стирки) и получи +1 выключение.
 - **👑 Premium-подписка** — 999 ₽/мес: безлимитные выключения, все цвета,
@@ -75,6 +81,12 @@ app/src/main/java/com/eblansoft/flashlight2/
 ├── Prefs.kt               # сохранение состояния (SharedPreferences)
 ├── security/
 │   └── SecurityChecker.kt # attestation + root + Play Integrity гейт
+├── dep/                   # DEP ID OAuth2 + DEP API v1 клиент
+│   ├── DepAuthConfig.kt   # client_id/secret, redirect_uri (flashlight://)
+│   ├── DepApi.kt          # HTTP-клиент (HttpURLConnection + org.json)
+│   ├── DepAuthState.kt    # состояние сессии, профиль, казино
+│   └── DepModels.kt
+├── tile/FlashlightTileService.kt  # плитка в шторке быстрых настроек
 ├── story/Story.kt         # тексты сюжетки
 └── ui/                    # экраны на Jetpack Compose
     ├── App.kt             # навигация + гейт безопасности

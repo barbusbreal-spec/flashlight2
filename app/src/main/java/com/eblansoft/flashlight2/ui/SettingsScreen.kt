@@ -1,5 +1,7 @@
 package com.eblansoft.flashlight2.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +58,9 @@ import androidx.fragment.app.FragmentActivity
 import com.eblansoft.flashlight2.GameState
 import com.eblansoft.flashlight2.Screen
 import com.eblansoft.flashlight2.Tiers
+import com.eblansoft.flashlight2.dep.DepAuthConfig
 import com.eblansoft.flashlight2.security.BiometricAuth
+import kotlinx.coroutines.launch
 
 private enum class SettingsTab(val label: String, val icon: ImageVector) {
     ACCOUNT("Account", Icons.Filled.AccountCircle),
@@ -66,7 +71,16 @@ private enum class SettingsTab(val label: String, val icon: ImageVector) {
 
 @Composable
 fun SettingsScreen(state: GameState) {
-    var tab by remember { mutableStateOf(SettingsTab.ACCOUNT) }
+    var tab by remember {
+        mutableStateOf(
+            when (state.consumePendingSettingsTab()) {
+                "privacy" -> SettingsTab.PRIVACY
+                "billing" -> SettingsTab.BILLING
+                "usage" -> SettingsTab.USAGE
+                else -> SettingsTab.ACCOUNT
+            }
+        )
+    }
 
     LaunchedEffect(tab) {
         if (tab == SettingsTab.BILLING) state.onOpenBilling()
@@ -153,9 +167,147 @@ private fun AccountTab(state: GameState, goBilling: () -> Unit) {
         Button(onClick = goBilling, modifier = Modifier.fillMaxWidth()) {
             Text("Управление подпиской")
         }
+
+        Spacer(Modifier.height(20.dp))
+        SectionTitle("Вход через DEP ID")
+        DepAccountSection(state)
+    }
+}
+
+@Composable
+private fun DepAccountSection(state: GameState) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val dep = state.dep
+
+    LaunchedEffect(dep.loggedIn) {
+        if (dep.loggedIn && dep.profile == null) dep.loadProfile()
+    }
+
+    if (!DepAuthConfig.isConfigured) {
+        InfoCard {
+            Text(
+                "OAuth-сервис не настроен: заполните CLIENT_ID и CLIENT_SECRET " +
+                    "в DepAuthConfig.kt после регистрации в DEP ID → Панель разработчика.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+        }
+        return
+    }
+
+    if (!dep.loggedIn) {
+        InfoCard {
+            Text(
+                "Войдите через DEP ID, чтобы видеть профиль, друзей и крутить слоты казино.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                modifier = Modifier.padding(bottom = 10.dp),
+            )
+            Button(
+                onClick = {
+                    val url = dep.buildAuthorizeUrl()
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                },
+                enabled = !dep.loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Войти через DEP ID") }
+        }
+    } else {
+        val profile = dep.profile
+        InfoCard {
+            if (profile == null) {
+                Text(
+                    if (dep.loading) "Загрузка профиля…" else "Профиль недоступен",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                )
+            } else {
+                KeyValue("Имя", profile.username)
+                KeyValue("Friend code", profile.friendCode)
+                KeyValue("DepCoins", profile.depcoins.toString())
+                KeyValue("Долг казино", profile.debt.toString())
+                KeyValue("Друзей", profile.friends.size.toString())
+                if (profile.description.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        profile.description,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = { scope.launch { dep.logout() } },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Выйти из DEP ID") }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        SectionTitle("Казино DEP")
+        DepCasinoWidget(state)
+    }
+
+    dep.error?.let { message ->
+        Spacer(Modifier.height(10.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable { dep.dismissError() },
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        ) {
+            Text(
+                message,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(12.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DepCasinoWidget(state: GameState) {
+    val dep = state.dep
+    val scope = rememberCoroutineScope()
+    var bet by remember { mutableStateOf("10") }
+
+    LaunchedEffect(Unit) { if (dep.casino == null) dep.loadCasino() }
+
+    InfoCard {
+        val balance = dep.casino
+        KeyValue("DepCoins", balance?.depcoins?.toString() ?: "…")
+        KeyValue("Долг", balance?.debt?.toString() ?: "…")
+
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = bet,
+            onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) bet = it },
+            label = { Text("Ставка") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
         Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { }, modifier = Modifier.fillMaxWidth()) {
-            Text("Выйти (никуда)")
+        Button(
+            onClick = { bet.toIntOrNull()?.takeIf { it > 0 }?.let { b -> scope.launch { dep.spin(b) } } },
+            enabled = !dep.loading && bet.toIntOrNull()?.let { it > 0 } == true,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (dep.loading) "Крутим…" else "Крутить слоты") }
+
+        dep.lastSpin?.let { spin ->
+            Spacer(Modifier.height(10.dp))
+            val label = when (spin.result) {
+                "jackpot" -> "🎰 ДЖЕКПОТ ×5!"
+                "win" -> "🎉 Выигрыш ×1.5"
+                "small_win" -> "↩️ Частичный возврат"
+                else -> "💸 Проигрыш"
+            }
+            Text(label, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                "Ставка ${spin.bet} → выигрыш ${spin.win} · баланс ${spin.balanceAfter}",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
         }
     }
 }

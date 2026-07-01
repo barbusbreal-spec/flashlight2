@@ -1,10 +1,12 @@
 package com.eblansoft.flashlight2
 
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import com.eblansoft.flashlight2.dep.DepAuthState
 import com.eblansoft.flashlight2.security.SecurityCheck
 import com.eblansoft.flashlight2.security.SecurityChecker
 import kotlinx.coroutines.Dispatchers
@@ -64,8 +66,36 @@ class GameState(
 
     val hasTorch: Boolean get() = flash.hasTorch
 
+    /** DEP ID (DEP API v1) OAuth session — login, profile, casino. */
+    val dep = DepAuthState(prefs)
+
     var screen by mutableStateOf(Screen.FLASHLIGHT)
         private set
+
+    /** Which Settings sub-tab to land on next time SETTINGS opens (consumed once). */
+    private var pendingSettingsTab: String? = null
+
+    fun requestSettingsTab(tab: String) { pendingSettingsTab = tab }
+
+    fun consumePendingSettingsTab(): String? {
+        val t = pendingSettingsTab
+        pendingSettingsTab = null
+        return t
+    }
+
+    /** Routes a `flashlight://open/<destination>` deep link to the right screen. */
+    fun openDeepLink(uri: Uri) {
+        if (uri.host != "open") { navigate(Screen.FLASHLIGHT); return }
+        when (uri.pathSegments.firstOrNull()?.lowercase()) {
+            "privacy" -> { requestSettingsTab("privacy"); navigate(Screen.SETTINGS) }
+            "billing" -> { requestSettingsTab("billing"); navigate(Screen.SETTINGS) }
+            "usage" -> { requestSettingsTab("usage"); navigate(Screen.SETTINGS) }
+            "settings", "account", "casino" -> { requestSettingsTab("account"); navigate(Screen.SETTINGS) }
+            "story" -> navigate(Screen.STORY)
+            "premium" -> navigate(Screen.PREMIUM)
+            else -> navigate(Screen.FLASHLIGHT)
+        }
+    }
 
     // ---- Security gate -----------------------------------------------------
     // The flashlight refuses to open until every check is green.
