@@ -1,7 +1,20 @@
 package com.eblansoft.flashlight2.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
+import android.os.BatteryManager
+import android.os.Build
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,12 +37,15 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -37,8 +53,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,8 +76,12 @@ import androidx.fragment.app.FragmentActivity
 import com.eblansoft.flashlight2.GameState
 import com.eblansoft.flashlight2.Screen
 import com.eblansoft.flashlight2.Tiers
+import com.eblansoft.flashlight2.dep.DepApi
 import com.eblansoft.flashlight2.dep.DepAuthConfig
 import com.eblansoft.flashlight2.security.BiometricAuth
+import java.io.File
+import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class SettingsTab(val label: String, val icon: ImageVector) {
@@ -67,6 +89,8 @@ private enum class SettingsTab(val label: String, val icon: ImageVector) {
     PRIVACY("Privacy", Icons.Filled.Shield),
     BILLING("Billing", Icons.Filled.CreditCard),
     USAGE("Usage", Icons.Filled.BarChart),
+    ABOUT("About", Icons.Filled.Info),
+    DEV("Dev", Icons.Filled.Terminal),
 }
 
 @Composable
@@ -77,6 +101,7 @@ fun SettingsScreen(state: GameState) {
                 "privacy" -> SettingsTab.PRIVACY
                 "billing" -> SettingsTab.BILLING
                 "usage" -> SettingsTab.USAGE
+                "about" -> SettingsTab.ABOUT
                 else -> SettingsTab.ACCOUNT
             }
         )
@@ -113,9 +138,9 @@ fun SettingsScreen(state: GameState) {
                         .padding(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    SettingsTab.entries.forEach { t ->
-                        RailItem(t, selected = t == tab) { tab = t }
-                    }
+                    SettingsTab.entries
+                        .filter { it != SettingsTab.DEV || state.devModeUnlocked }
+                        .forEach { t -> RailItem(t, selected = t == tab) { tab = t } }
                 }
 
                 Box(Modifier.weight(1f).fillMaxSize().padding(end = 16.dp, start = 4.dp)) {
@@ -124,6 +149,8 @@ fun SettingsScreen(state: GameState) {
                         SettingsTab.PRIVACY -> PrivacyTab(state)
                         SettingsTab.BILLING -> BillingTab(state)
                         SettingsTab.USAGE -> UsageTab(state)
+                        SettingsTab.ABOUT -> AboutTab(state)
+                        SettingsTab.DEV -> DevTab(state)
                     }
                 }
             }
@@ -488,6 +515,437 @@ private fun UsageTab(state: GameState) {
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
         )
+    }
+}
+
+// ---- About -------------------------------------------------------------
+
+@Composable
+private fun AboutTab(state: GameState) {
+    val context = LocalContext.current
+    val packageInfo = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
+    }
+    val versionName = packageInfo?.versionName ?: "?"
+    @Suppress("DEPRECATION")
+    val versionCode = packageInfo?.let {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode else it.versionCode.toLong()
+    } ?: 0L
+
+    ScrollColumn {
+        SectionTitle("О программе")
+        InfoCard {
+            Text("🔦", fontSize = 40.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Фонарик 2 Ultimate", fontWeight = FontWeight.Bold, fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Издатель: Еблан Софт", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Версия $versionName (build $versionCode)" + if (state.devModeUnlocked) " · DEV" else "",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { state.tapVersionNumber() },
+            )
+            if (!state.devModeUnlocked && state.versionTapCount > 0) {
+                Text(
+                    "Тапнуто: ${state.versionTapCount}",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        InfoCard {
+            Text(
+                "Фонарик 2 Ultimate — сатира на мобильную монетизацию: включать " +
+                    "свет бесплатно, выключать — по лимиту. Реклама, подписки, " +
+                    "казино через DEP ID и сюжетка про мир Вечной Тьмы прилагаются.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        InfoCard {
+            KeyValue("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            KeyValue("Устройство", "${Build.MANUFACTURER} ${Build.MODEL}")
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "© 2026 Еблан Софт. Все права никому не принадлежат.",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+        )
+    }
+}
+
+// ---- Dev (secret) --------------------------------------------------------
+
+@Composable
+private fun DevTab(state: GameState) {
+    ScrollColumn {
+        SectionTitle("Дев-меню 🛠️")
+        Text(
+            "Секретный раздел. Всё здесь по-настоящему работает — но абсолютно бесполезно.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+
+        DevDeviceInfoCard()
+        Spacer(Modifier.height(12.dp))
+        DevStrobeCard(state)
+        Spacer(Modifier.height(12.dp))
+        DevVibrationCard()
+        Spacer(Modifier.height(12.dp))
+        DevLightSensorCard()
+        Spacer(Modifier.height(12.dp))
+        DevNetworkCard()
+        Spacer(Modifier.height(12.dp))
+        DevCacheCard()
+        Spacer(Modifier.height(12.dp))
+        DevExportCard(state)
+        Spacer(Modifier.height(12.dp))
+        DevCheatsCard(state)
+        Spacer(Modifier.height(12.dp))
+        DevSunCard()
+        Spacer(Modifier.height(12.dp))
+        DevFactsCard()
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun DevDeviceInfoCard() {
+    val context = LocalContext.current
+    val metrics = context.resources.displayMetrics
+    val uptimeMin = remember { SystemClock.elapsedRealtime() / 60000L }
+    val battery = remember {
+        runCatching {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
+        }.getOrNull()
+    }
+
+    SectionTitle("Инфо об устройстве")
+    InfoCard {
+        KeyValue("Модель", "${Build.MANUFACTURER} ${Build.MODEL}")
+        KeyValue("Android", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        KeyValue("Экран", "${metrics.widthPixels}×${metrics.heightPixels} @ ${metrics.densityDpi}dpi")
+        KeyValue("Локаль", Locale.getDefault().toString())
+        KeyValue("Аптайм", "$uptimeMin мин")
+        KeyValue("Батарея", battery?.let { "$it%" } ?: "недоступно")
+    }
+}
+
+@Composable
+private fun DevStrobeCard(state: GameState) {
+    var strobeOn by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        onDispose { state.devRawTorch(false) }
+    }
+
+    LaunchedEffect(strobeOn) {
+        if (!strobeOn) { state.devRawTorch(false); return@LaunchedEffect }
+        val dot = 200L; val dash = 600L; val gap = 200L; val letterGap = 400L; val wordGap = 1000L
+        try {
+            while (true) {
+                repeat(3) { state.devRawTorch(true); delay(dot); state.devRawTorch(false); delay(gap) }
+                delay(letterGap)
+                repeat(3) { state.devRawTorch(true); delay(dash); state.devRawTorch(false); delay(gap) }
+                delay(letterGap)
+                repeat(3) { state.devRawTorch(true); delay(dot); state.devRawTorch(false); delay(gap) }
+                delay(wordGap)
+            }
+        } finally {
+            state.devRawTorch(false)
+        }
+    }
+
+    SectionTitle("SOS-фонарик (морзянка)")
+    InfoCard {
+        if (!state.hasTorch) {
+            Text(
+                "На этом устройстве нет вспышки.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Text(
+                "Мигает настоящей вспышкой в азбуке Морзе: ... --- ...",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+            Button(
+                onClick = { strobeOn = !strobeOn },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (strobeOn) "Остановить SOS" else "Запустить SOS") }
+        }
+    }
+}
+
+@Composable
+private fun DevVibrationCard() {
+    val context = LocalContext.current
+
+    SectionTitle("Тест вибрации")
+    InfoCard {
+        Button(
+            onClick = {
+                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
+                        ?.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                }
+                val pattern = longArrayOf(0, 100, 80, 100, 80, 200)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator?.vibrate(VibrationEffect.createWaveform(pattern, -1))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(pattern, -1)
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Тряхнуть телефон") }
+    }
+}
+
+@Composable
+private fun DevLightSensorCard() {
+    val context = LocalContext.current
+    var lux by remember { mutableStateOf<Float?>(null) }
+
+    DisposableEffect(Unit) {
+        val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val sensor = manager?.getDefaultSensor(Sensor.TYPE_LIGHT)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) { lux = event.values.firstOrNull() }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (sensor != null) manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        onDispose { manager?.unregisterListener(listener) }
+    }
+
+    SectionTitle("Датчик освещённости")
+    InfoCard {
+        Text(
+            lux?.let { "${it.toInt()} люкс" } ?: "Датчик недоступен или ждём показаний…",
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            "Совет: выключите фонарик, чтобы значение было честным.",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+        )
+    }
+}
+
+@Composable
+private fun DevNetworkCard() {
+    val scope = rememberCoroutineScope()
+    var result by remember { mutableStateOf<String?>(null) }
+    var pinging by remember { mutableStateOf(false) }
+
+    SectionTitle("Пинг DEP API")
+    InfoCard {
+        Text(
+            result ?: "Замерим задержку до DEP API.",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        Button(
+            onClick = {
+                pinging = true
+                scope.launch {
+                    result = runCatching { DepApi.ping() }
+                        .fold({ ms -> "Пинг: $ms мс" }, { e -> "Ошибка: ${e.message}" })
+                    pinging = false
+                }
+            },
+            enabled = !pinging,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (pinging) "Пингуем…" else "Пинговать DEP API") }
+    }
+}
+
+@Composable
+private fun DevCacheCard() {
+    val context = LocalContext.current
+    var status by remember { mutableStateOf<String?>(null) }
+
+    SectionTitle("Очистка кэша")
+    InfoCard {
+        Text(
+            status ?: "Реально считает и чистит кэш приложения.",
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        Button(
+            onClick = {
+                val before = dirSize(context.cacheDir)
+                context.cacheDir.deleteRecursively()
+                status = "Освобождено: ${before / 1024} КБ"
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Очистить кэш") }
+    }
+}
+
+private fun dirSize(dir: File): Long =
+    dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+@Composable
+private fun DevExportCard(state: GameState) {
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+
+    SectionTitle("Экспорт состояния")
+    InfoCard {
+        Text(
+            "Копирует дамп текущего состояния в буфер обмена — для багрепортов.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        Button(
+            onClick = {
+                val dump = buildString {
+                    appendLine("Flashlight2Ultimate debug dump")
+                    appendLine("tier=${state.tier} premium=${state.premium}")
+                    appendLine("onRemaining=${state.onRemaining} offRemaining=${state.offRemaining}")
+                    appendLine("story=${state.storyProgress}")
+                    appendLine("depLoggedIn=${state.dep.loggedIn}")
+                    appendLine("devMode=${state.devModeUnlocked}")
+                }
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("debug", dump))
+                copied = true
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (copied) "Скопировано ✓" else "Скопировать дамп") }
+    }
+}
+
+@Composable
+private fun DevCheatsCard(state: GameState) {
+    val scope = rememberCoroutineScope()
+
+    SectionTitle("Читы")
+    InfoCard {
+        Button(onClick = { state.devMaxTier() }, modifier = Modifier.fillMaxWidth()) {
+            Text("God Mode: максимальный тариф")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { state.cancelPremium() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Сбросить тариф на Free")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { state.devResetQuotaWindow() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Обнулить 10-часовое окно")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { state.devResetStory() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Сбросить сюжетку")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = { state.devResetLock() }, modifier = Modifier.fillMaxWidth()) {
+            Text("Снять пароль/биометрию")
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = { scope.launch { state.dep.logout() } },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Выйти из DEP ID") }
+    }
+}
+
+@Composable
+private fun DevSunCard() {
+    var running by remember { mutableStateOf(false) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    var done by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    SectionTitle("Пересобрать Солнце")
+    InfoCard {
+        if (running) {
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "${(progress * 100).toInt()}%",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
+        } else if (done) {
+            Text(
+                "Готово. Ничего не изменилось.",
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                done = false
+                running = true
+                progress = 0f
+                scope.launch {
+                    while (progress < 1f) {
+                        delay(40)
+                        progress = (progress + 0.02f).coerceAtMost(1f)
+                    }
+                    running = false
+                    done = true
+                }
+            },
+            enabled = !running,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (running) "Пересборка…" else "Начать пересборку") }
+    }
+}
+
+private val DEV_FACTS = listOf(
+    "Раньше «Фонарик 1» умел светить, но не умел выключаться вообще.",
+    "У «Еблан Софт» нет отдела тестирования — есть только вы.",
+    "Слово «Ultimate» в названии добавили, потому что версия 3 не поместилась в бюджет.",
+    "Секретная кнопка «Светить сильнее» физически ничего не меняет, но психологически — очень даже.",
+    "DepCoins не конвертируются в рубли. И в доллары. Вообще никак.",
+    "Казино в фонарике встроено потому что «а почему бы и нет».",
+    "Этот дев-режим тоже когда-нибудь монетизируют.",
+)
+
+@Composable
+private fun DevFactsCard() {
+    var index by remember { mutableStateOf(0) }
+
+    SectionTitle("Случайный факт")
+    InfoCard {
+        Text(
+            DEV_FACTS[index],
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+            modifier = Modifier.padding(bottom = 8.dp),
+        )
+        Button(
+            onClick = { index = (index + 1) % DEV_FACTS.size },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Следующий факт") }
     }
 }
 

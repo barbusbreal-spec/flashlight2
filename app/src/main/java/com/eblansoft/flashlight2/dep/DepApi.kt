@@ -42,6 +42,22 @@ object DepApi {
         }
     }
 
+    /** Measures round-trip latency (ms) to the DEP API host. Dev-menu novelty. */
+    suspend fun ping(): Long = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        val conn = (URL(DepAuthConfig.BASE).openConnection() as HttpURLConnection).apply {
+            requestMethod = "HEAD"
+            connectTimeout = 8000
+            readTimeout = 8000
+        }
+        try {
+            conn.responseCode
+        } finally {
+            conn.disconnect()
+        }
+        System.currentTimeMillis() - start
+    }
+
     // ---- Profile / Casino --------------------------------------------------
 
     suspend fun profile(accessToken: String): DepProfile =

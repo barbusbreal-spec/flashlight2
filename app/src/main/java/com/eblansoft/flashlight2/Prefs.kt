@@ -84,6 +84,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_BIOMETRIC, false)
         set(v) = sp.edit().putBoolean(KEY_BIOMETRIC, v).apply()
 
+    /** Unlocked by tapping the version number in About 7 times. */
+    var devModeUnlocked: Boolean
+        get() = sp.getBoolean(KEY_DEV_MODE, false)
+        set(v) = sp.edit().putBoolean(KEY_DEV_MODE, v).apply()
+
     // ---- DEP ID (OAuth) ----------------------------------------------------
 
     var depAccessToken: String
@@ -130,6 +135,7 @@ class Prefs(context: Context) {
         private const val KEY_PW_ON = "password_enabled"
         private const val KEY_PW = "password"
         private const val KEY_BIOMETRIC = "biometric_enabled"
+        private const val KEY_DEV_MODE = "dev_mode_unlocked"
         private const val KEY_DEP_ACCESS = "dep_access_token"
         private const val KEY_DEP_REFRESH = "dep_refresh_token"
         private const val KEY_DEP_EXPIRES = "dep_expires_at"

@@ -91,6 +91,7 @@ class GameState(
             "billing" -> { requestSettingsTab("billing"); navigate(Screen.SETTINGS) }
             "usage" -> { requestSettingsTab("usage"); navigate(Screen.SETTINGS) }
             "settings", "account", "casino" -> { requestSettingsTab("account"); navigate(Screen.SETTINGS) }
+            "about" -> { requestSettingsTab("about"); navigate(Screen.SETTINGS) }
             "story" -> navigate(Screen.STORY)
             "premium" -> navigate(Screen.PREMIUM)
             else -> navigate(Screen.FLASHLIGHT)
@@ -486,6 +487,66 @@ class GameState(
 
     fun onOpenSettings() = fireStoryEvent(EV_OPEN_SETTINGS)
     fun onOpenBilling() = fireStoryEvent(EV_OPEN_BILLING)
+
+    // ---- About / secret dev menu --------------------------------------------
+
+    var devModeUnlocked by mutableStateOf(prefs.devModeUnlocked)
+        private set
+
+    var versionTapCount by mutableIntStateOf(0)
+        private set
+
+    /** Tap the version number in About 7 times to unlock the dev menu. */
+    fun tapVersionNumber() {
+        if (devModeUnlocked) return
+        versionTapCount++
+        when {
+            versionTapCount >= 7 -> {
+                devModeUnlocked = true
+                prefs.devModeUnlocked = true
+                notify(AppNotification("🛠️", "Вы разработчик!", "Секретное дев-меню разблокировано."))
+            }
+            versionTapCount >= 4 -> notify(
+                AppNotification("👀", "Ещё немного…", "Осталось нажатий: ${7 - versionTapCount}")
+            )
+        }
+    }
+
+    /** Dev-only: raw torch control, bypasses quotas and lightOn entirely. */
+    fun devRawTorch(on: Boolean) { flash.setTorch(on) }
+
+    fun devMaxTier() {
+        val top = Tiers.ALL.lastIndex
+        tier = top
+        prefs.tier = top
+        premium = true
+        prefs.premium = true
+        notify(AppNotification("😈", "God Mode", "Выдан максимальный тариф «${Tiers.ALL[top].name}»."))
+    }
+
+    fun devResetStory() {
+        storyProgress = 0
+        prefs.storyProgress = 0
+        firedEvents.clear()
+        prefs.storyEvents = emptySet()
+        notify(AppNotification("📖", "Сюжетка сброшена", "Прогресс главы обнулён."))
+    }
+
+    fun devResetLock() {
+        passwordEnabled = false
+        prefs.passwordEnabled = false
+        prefs.password = ""
+        biometricEnabled = false
+        prefs.biometricEnabled = false
+        locked = false
+        notify(AppNotification("🔓", "Блокировка снята", "Пароль и биометрия отключены."))
+    }
+
+    fun devResetQuotaWindow() {
+        prefs.windowStart = 0
+        rolloverWindowIfNeeded()
+        notify(AppNotification("⏳", "Лимиты сброшены", "10-часовое окно обнулено досрочно."))
+    }
 
     // ---- Navigation --------------------------------------------------------
 
