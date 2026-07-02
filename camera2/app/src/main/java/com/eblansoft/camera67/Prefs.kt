@@ -25,10 +25,6 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("premium", false)
         set(value) = sp.edit().putBoolean("premium", value).apply()
 
-    var hdrModeIndex: Int
-        get() = sp.getInt("hdr_mode", HDR_MODES.size - 1)
-        set(value) = sp.edit().putInt("hdr_mode", value).apply()
-
     fun photosToday(): Int {
         return if (sp.getString("photos_date", "") == today()) {
             sp.getInt("photos_count", 0)
@@ -47,15 +43,4 @@ class Prefs(context: Context) {
     }
 
     fun photosLeft(): Int = (dailyLimit - photosToday()).coerceAtLeast(0)
-
-    companion object {
-        /** Режимы съёмки. Каждый следующий круче предыдущего в 67 раз. */
-        val HDR_MODES = listOf(
-            "HDR",
-            "HDR+",
-            "HDR++ 4k",
-            "HDR+++++ 1984k",
-            "eblanHRR™©® 67x",
-        )
-    }
 }

@@ -19,13 +19,17 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -33,12 +37,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +53,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -74,6 +76,14 @@ import java.util.Locale
 private const val FREE_VIDEO_LIMIT_SEC = 60
 private const val PREMIUM_VIDEO_LIMIT_SEC = 60
 
+private val AI_PHRASES = listOf(
+    "AI 777 нейросеть смотрит на фотку 👀",
+    "Выкручиваем ебейшесть до 67⁷ ✅",
+    "Кладём УЛЬТРА++++ сочность 🌈",
+    "Глоу, виньетка, вайб 💅",
+    "Ставим пометку AI ✨ и ватермарку 🤝",
+)
+
 @Composable
 fun CameraScreen(onOpenPremium: () -> Unit) {
     val context = LocalContext.current
@@ -83,7 +93,6 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
 
     var isVideoMode by remember { mutableStateOf(false) }
     var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
-    var hdrMode by remember { mutableIntStateOf(prefs.hdrModeIndex) }
     var photosLeft by remember { mutableIntStateOf(prefs.photosLeft()) }
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
@@ -97,7 +106,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
 
-    // Перепривязываем камеру при смене режима/объектива.
+    // Перепривязываем камеру при смене фото/видео или объектива.
     LaunchedEffect(isVideoMode, lensFacing) {
         recording?.stop()
         recording = null
@@ -172,20 +181,20 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
                         val saved = withContext(Dispatchers.Default) {
                             val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             val upright = EblanAlgorithms.rotate(raw, rotation)
-                            val masterpiece = EblanAlgorithms.process(upright, hdrMode)
+                            val masterpiece = EblanAlgorithms.process(upright)
                             EblanAlgorithms.saveToGallery(context, masterpiece)
                         }
-                        // Алгоритмы такие крутые, что обязаны поработать подольше.
-                        delay(1400)
+                        // Нейросеть 777 обязана подумать подольше — для солидности.
+                        delay(1600)
                         isProcessing = false
                         if (saved != null) {
                             prefs.registerPhoto()
                             photosLeft = prefs.photosLeft()
                             statusMessage =
-                                "Фото в ${Prefs.HDR_MODES[hdrMode]} 1984k сохранено ✅✅✅ " +
+                                "AI ✨ ${EblanAlgorithms.MODE_NAME} применён, фотка ебейшая ✅✅✅ " +
                                     "Осталось $photosLeft/12"
                         } else {
-                            statusMessage = "Не сохранилось 💀 (даже наши алгоритмы бессильны)"
+                            statusMessage = "Не сохранилось 💀 (даже AI 777 бессилен)"
                         }
                     }
                 }
@@ -237,16 +246,9 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
 
         TopBar(
             prefs = prefs,
-            hdrMode = hdrMode,
             photosLeft = photosLeft,
             isRecording = recording != null,
             recordSeconds = recordSeconds,
-            onCycleHdr = {
-                hdrMode = (hdrMode + 1) % Prefs.HDR_MODES.size
-                prefs.hdrModeIndex = hdrMode
-                statusMessage = "Режим ${Prefs.HDR_MODES[hdrMode]} включён ✅ " +
-                    "(в ${67 * (hdrMode + 1)} раз круче гугла)"
-            },
             onOpenPremium = onOpenPremium,
             modifier = Modifier.align(Alignment.TopCenter),
         )
@@ -282,7 +284,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         )
 
         if (isProcessing) {
-            ProcessingOverlay(hdrMode = hdrMode, modifier = Modifier.align(Alignment.Center))
+            AiProcessingOverlay(modifier = Modifier.align(Alignment.Center))
         }
 
         if (showLimitDialog) {
@@ -291,7 +293,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
                 title = { Text("Лимит исчерпан 💀") },
                 text = {
                     Text(
-                        "12 из 12 фото за сегодня. Всё, брат, объектив устал 🤝\n\n" +
+                        "12 из 12 фото за сегодня. Всё, брат, нейросеть перегрелась 🤝\n\n" +
                             "Приходи завтра. Или возьми PREMIUM — лимит останется 12, " +
                             "но у тебя будет галочка престижа ✅"
                     )
@@ -311,57 +313,76 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
     }
 }
 
+/** Молодёжная пилюля: полупрозрачная, скруглённая, с эмодзи. */
+@Composable
+private fun Pill(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = Color(0x99000000),
+    textColor: Color = Color.White,
+    bold: Boolean = false,
+    onClick: (() -> Unit)? = null,
+) {
+    Text(
+        text,
+        color = textColor,
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = modifier
+            .background(color, RoundedCornerShape(50))
+            .let { m -> if (onClick != null) m.clickable(onClick = onClick) else m }
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+    )
+}
+
 @Composable
 private fun TopBar(
     prefs: Prefs,
-    hdrMode: Int,
     photosLeft: Int,
     isRecording: Boolean,
     recordSeconds: Int,
-    onCycleHdr: () -> Unit,
     onOpenPremium: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(12.dp),
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xCC000000), Color.Transparent)
+                )
+            )
+            .padding(horizontal = 12.dp, vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            AssistChip(
+            Pill(
+                text = if (prefs.isPremium) "⭐ PREMIUM ✅" else "🆓 FREE → premium",
+                color = if (prefs.isPremium) Color(0xCC7C4DFF) else Color(0x99000000),
+                bold = prefs.isPremium,
                 onClick = onOpenPremium,
-                label = {
-                    Text(if (prefs.isPremium) "⭐ PREMIUM ✅" else "🆓 FREE · взять premium")
-                },
             )
-            AssistChip(
-                onClick = onCycleHdr,
-                label = { Text(Prefs.HDR_MODES[hdrMode]) },
-            )
+            Pill(text = "📸 $photosLeft/12", bold = true)
         }
-        Text(
-            "📸 $photosLeft/12 фото на сегодня · алгоритмы x67 активны ✅✅✅",
-            color = Color.White,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier
-                .background(Color(0x99000000), RoundedCornerShape(12.dp))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
+        // Единственный режим. Переключалок нет и не будет — сразу максимум.
+        Pill(
+            text = "✨ AI ${EblanAlgorithms.MODE_NAME} ✅",
+            color = Color(0xB3311B92),
+            bold = true,
         )
         if (isRecording) {
             val limitLabel = if (prefs.isPremium) "БЕЗЛИМИТ (до 1:00) 🤝" else "лимит 1:00"
-            Text(
-                "🔴 REC %d:%02d · %s".format(recordSeconds / 60, recordSeconds % 60, limitLabel),
-                color = Color(0xFFFF5252),
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .background(Color(0x99000000), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            Pill(
+                text = "🔴 REC %d:%02d · %s".format(
+                    recordSeconds / 60, recordSeconds % 60, limitLabel
+                ),
+                color = Color(0xCC7F0000),
+                bold = true,
             )
         }
     }
@@ -380,70 +401,121 @@ private fun BottomBar(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AssistChip(
-                onClick = { onModeChange(false) },
-                label = { Text(if (!isVideoMode) "ФОТО ✅" else "фото") },
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color(0xCC000000))
+                )
             )
-            AssistChip(
+            .padding(top = 28.dp, bottom = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        // Фото/видео — не режимы, а призвание.
+        Row(
+            modifier = Modifier.background(Color(0x66000000), RoundedCornerShape(50)),
+        ) {
+            Pill(
+                text = "📸 ФОТО",
+                color = if (!isVideoMode) Color(0xE6FFFFFF) else Color.Transparent,
+                textColor = if (!isVideoMode) Color.Black else Color.White,
+                bold = !isVideoMode,
+                onClick = { onModeChange(false) },
+            )
+            Pill(
+                text = "🎬 ВИДЕО",
+                color = if (isVideoMode) Color(0xE6FFFFFF) else Color.Transparent,
+                textColor = if (isVideoMode) Color.Black else Color.White,
+                bold = isVideoMode,
                 onClick = { onModeChange(true) },
-                label = { Text(if (isVideoMode) "ВИДЕО ✅" else "видео") },
             )
         }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(32.dp),
-        ) {
-            FilledIconButton(
-                onClick = onShutter,
+        Box(modifier = Modifier.fillMaxWidth()) {
+            ShutterButton(
+                isVideoMode = isVideoMode,
+                isRecording = isRecording,
                 enabled = !isProcessing,
-                modifier = Modifier.size(84.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = when {
-                        isRecording -> Color(0xFFFF5252)
-                        isVideoMode -> Color(0xFFFFD34D)
-                        else -> Color.White
-                    }
-                ),
+                onClick = onShutter,
+                modifier = Modifier.align(Alignment.Center),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 36.dp)
+                    .size(52.dp)
+                    .background(Color(0x66FFFFFF), CircleShape)
+                    .clickable(onClick = onSwitchCamera),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    when {
-                        isRecording -> "⏹"
-                        isVideoMode -> "🔴"
-                        else -> "📸"
-                    },
-                    style = MaterialTheme.typography.headlineMedium,
+                Icon(
+                    Icons.Filled.Cameraswitch,
+                    contentDescription = "Сменить камеру",
+                    tint = Color.White,
                 )
-            }
-            FilledIconButton(onClick = onSwitchCamera, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.Filled.Cameraswitch, contentDescription = "Сменить камеру")
             }
         }
     }
 }
 
 @Composable
-private fun ProcessingOverlay(hdrMode: Int, modifier: Modifier = Modifier) {
+private fun ShutterButton(
+    isVideoMode: Boolean,
+    isRecording: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val innerColor by animateColorAsState(
+        targetValue = when {
+            isRecording -> Color(0xFFFF3B30)
+            isVideoMode -> Color(0xFFFF5252)
+            else -> Color.White
+        },
+        label = "shutter",
+    )
+    Box(
+        modifier = modifier
+            .size(86.dp)
+            .border(5.dp, Color.White, CircleShape)
+            .padding(10.dp)
+            .background(
+                innerColor,
+                if (isRecording) RoundedCornerShape(10.dp) else CircleShape,
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+    )
+}
+
+@Composable
+private fun AiProcessingOverlay(modifier: Modifier = Modifier) {
+    var phraseIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(650)
+            phraseIndex = (phraseIndex + 1) % AI_PHRASES.size
+        }
+    }
     Column(
         modifier = modifier
-            .background(Color(0xE60B0B0F), RoundedCornerShape(20.dp))
-            .padding(24.dp),
+            .padding(horizontal = 32.dp)
+            .background(Color(0xE60B0B0F), RoundedCornerShape(24.dp))
+            .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        CircularProgressIndicator()
+        Text("✨", style = MaterialTheme.typography.displaySmall)
+        CircularProgressIndicator(color = Color(0xFF7C4DFF))
         Text(
-            "Применяем ${Prefs.HDR_MODES[hdrMode]}…\n" +
-                "1984k · eblanHRR™©® · x67 круче гугла ✅✅✅\n" +
-                "Ставим ватермарку EBLAN Camera 67 🤝",
+            "AI ${EblanAlgorithms.MODE_NAME}",
             color = Color.White,
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            AI_PHRASES[phraseIndex],
+            color = Color(0xFFCCCCDD),
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.height(40.dp),
         )
     }
 }
