@@ -76,14 +76,6 @@ import java.util.Locale
 private const val FREE_VIDEO_LIMIT_SEC = 60
 private const val PREMIUM_VIDEO_LIMIT_SEC = 60
 
-private val AI_PHRASES = listOf(
-    "AI 777 нейросеть смотрит на фотку 👀",
-    "Выкручиваем ебейшесть до 67⁷ ✅",
-    "Кладём УЛЬТРА++++ сочность 🌈",
-    "Глоу, виньетка, вайб 💅",
-    "Ставим пометку AI ✨ и ватермарку 🤝",
-)
-
 @Composable
 fun CameraScreen(onOpenPremium: () -> Unit) {
     val context = LocalContext.current
@@ -97,6 +89,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
+    var processingStage by remember { mutableStateOf(EblanAlgorithms.STAGES.first()) }
     var showLimitDialog by remember { mutableStateOf(false) }
 
     var recording by remember { mutableStateOf<Recording?>(null) }
@@ -169,6 +162,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         }
         val capture = imageCapture ?: return
         isProcessing = true
+        processingStage = EblanAlgorithms.STAGES.first()
         capture.takePicture(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {
@@ -178,21 +172,24 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
                     val rotation = image.imageInfo.rotationDegrees
                     image.close()
                     scope.launch {
+                        val startedAt = System.currentTimeMillis()
                         val saved = withContext(Dispatchers.Default) {
                             val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             val upright = EblanAlgorithms.rotate(raw, rotation)
-                            val masterpiece = EblanAlgorithms.process(upright)
+                            val masterpiece = EblanAlgorithms.process(upright) { stage ->
+                                processingStage = stage
+                            }
                             EblanAlgorithms.saveToGallery(context, masterpiece)
                         }
-                        // Нейросеть 777 обязана подумать подольше — для солидности.
-                        delay(1600)
+                        val lagSec = (System.currentTimeMillis() - startedAt) / 1000f
                         isProcessing = false
                         if (saved != null) {
                             prefs.registerPhoto()
                             photosLeft = prefs.photosLeft()
                             statusMessage =
-                                "AI ✨ ${EblanAlgorithms.MODE_NAME} применён, фотка ебейшая ✅✅✅ " +
-                                    "Осталось $photosLeft/12"
+                                "AI ✨ ${EblanAlgorithms.MODE_NAME}: фотка ебейшая ✅✅✅ " +
+                                    "Нейросеть страдала %.1f сек 🥵 Осталось $photosLeft/12"
+                                        .format(lagSec)
                         } else {
                             statusMessage = "Не сохранилось 💀 (даже AI 777 бессилен)"
                         }
@@ -284,7 +281,10 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         )
 
         if (isProcessing) {
-            AiProcessingOverlay(modifier = Modifier.align(Alignment.Center))
+            AiProcessingOverlay(
+                stage = processingStage,
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
 
         if (showLimitDialog) {
@@ -486,14 +486,7 @@ private fun ShutterButton(
 }
 
 @Composable
-private fun AiProcessingOverlay(modifier: Modifier = Modifier) {
-    var phraseIndex by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(650)
-            phraseIndex = (phraseIndex + 1) % AI_PHRASES.size
-        }
-    }
+private fun AiProcessingOverlay(stage: String, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .padding(horizontal = 32.dp)
@@ -510,8 +503,9 @@ private fun AiProcessingOverlay(modifier: Modifier = Modifier) {
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.titleMedium,
         )
+        // Это не анимация для красоты — реальный этап пайплайна прямо сейчас.
         Text(
-            AI_PHRASES[phraseIndex],
+            stage,
             color = Color(0xFFCCCCDD),
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium,

@@ -5,8 +5,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
@@ -20,54 +18,326 @@ import android.provider.MediaStore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.exp
 import kotlin.math.hypot
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
- * Ядро продукта. Один режим, без переключалок, всегда на максимум:
+ * Ядро продукта. Никаких «наложили фильтр и разошлись» — тут настоящая
+ * вычислительная фотография уровня:
  *
  *          ✨ AI 777 67 УЛЬТРА++++ ✨
  *
- * Пайплайн (каждый шаг — отдельная нобелевка):
- *  1. AI-цветокор: сочность x1.9, S-контраст, тёплый киношный тон.
- *  2. AI-глоу: блум как в клипах, чтобы кожа светилась, а фонари пели.
- *  3. AI-виньетка: края темнеют — взгляд сам летит в центр кадра.
- *  4. Пометка AI ✨ в углу — молодёжно, как у больших, но честнее.
- *  5. Ватермарка EBLAN Camera 67 ✅ — вечная.
+ * Пайплайн гоняет КАЖДЫЙ пиксель через семь этапов, поэтому телефон
+ * честно лагает — это не баг, это глубина обработки:
+ *
+ *  1. Разбор кадра на пиксели и карту яркости.
+ *  2. CLAHE — адаптивная эквализация гистограмм по 64 зонам (как в NASA,
+ *     только у нас зон больше на вайб).
+ *  3. Синтез трёх виртуальных экспозиций (EV-, EV0, EV+) и exposure fusion
+ *     по гауссовым весам — тот самый «HDR как у гугла», но в 67 раз честнее.
+ *  4. Свёртка резкости: раздельный box-blur + unsharp mask по яркости.
+ *  5. Тон-кривая 777 и сочность — по каждому каналу через LUT.
+ *  6. AI-глоу (блум SCREEN-наложением) и киношная виньетка.
+ *  7. Пометка AI ✨ и вечная ватермарка.
  */
 object EblanAlgorithms {
 
     const val MODE_NAME = "777 67 УЛЬТРА++++"
 
-    fun process(source: Bitmap): Bitmap {
-        val result = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    /** Максимум мегапикселей в обработку — чтобы лагало, но не умирало. */
+    private const val MAX_PIXELS = 12_500_000
+
+    val STAGES = listOf(
+        "Этап 1/7: читаем RAW-душу кадра 👀",
+        "Этап 2/7: CLAHE-гистограммы по 64 зонам 📊",
+        "Этап 3/7: синтез 3 экспозиций + fusion 🌗",
+        "Этап 4/7: свёртка резкости 67×67 🔪",
+        "Этап 5/7: тон-кривая 777 и сочность 🌈",
+        "Этап 6/7: AI-глоу и виньетка, кино 🎬",
+        "Этап 7/7: пометка AI ✨ и ватермарка 🤝",
+    )
+
+    fun process(source: Bitmap, onStage: (String) -> Unit = {}): Bitmap {
+        // ---------- Этап 1: пиксели и яркость ----------
+        onStage(STAGES[0])
+        val capped = capResolution(source)
+        val w = capped.width
+        val h = capped.height
+        val n = w * h
+        val px = IntArray(n)
+        capped.getPixels(px, 0, w, 0, 0, w, h)
+        if (capped !== source) capped.recycle()
+
+        var luma = ByteArray(n)
+        for (i in 0 until n) {
+            val c = px[i]
+            luma[i] = (((c ushr 16 and 0xFF) * 299 +
+                (c ushr 8 and 0xFF) * 587 +
+                (c and 0xFF) * 114) / 1000).toByte()
+        }
+
+        // ---------- Этап 2: CLAHE ----------
+        onStage(STAGES[1])
+        applyClahe(px, luma, w, h)
+
+        // ---------- Этап 3: exposure fusion ----------
+        onStage(STAGES[2])
+        applyExposureFusion(px, n)
+
+        // ---------- Этап 4: unsharp mask ----------
+        onStage(STAGES[3])
+        for (i in 0 until n) {
+            val c = px[i]
+            luma[i] = (((c ushr 16 and 0xFF) * 299 +
+                (c ushr 8 and 0xFF) * 587 +
+                (c and 0xFF) * 114) / 1000).toByte()
+        }
+        applyUnsharp(px, luma, w, h)
+        luma = ByteArray(0) // нейросеть освобождает память как умеет
+
+        // ---------- Этап 5: тон-кривая + сочность ----------
+        onStage(STAGES[4])
+        applyToneAndSaturation(px, n)
+
+        val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        result.setPixels(px, 0, w, 0, 0, w, h)
         val canvas = Canvas(result)
 
-        // Шаг 1: AI-цветокор — насыщенность, контраст и тёплый тон одной матрицей.
-        val saturation = ColorMatrix().apply { setSaturation(1.9f) }
-        val contrast = 1.35f
-        val lift = -24f * (contrast - 1f) * 2.55f
-        val punch = ColorMatrix(
-            floatArrayOf(
-                contrast * 1.06f, 0f, 0f, 0f, lift,        // тёплый красный
-                0f, contrast, 0f, 0f, lift,
-                0f, 0f, contrast * 0.94f, 0f, lift,        // холодим синий
-                0f, 0f, 0f, 1f, 0f,
-            )
-        )
-        saturation.postConcat(punch)
-        val colorPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-            colorFilter = ColorMatrixColorFilter(saturation)
-        }
-        canvas.drawBitmap(source, 0f, 0f, colorPaint)
+        // ---------- Этап 6: глоу + виньетка ----------
+        onStage(STAGES[5])
+        applyGlow(canvas, result)
+        applyVignette(canvas, w, h)
 
-        // Шаг 2: AI-глоу. Уменьшаем в 16 раз, растягиваем обратно (бесплатный блюр)
-        // и накладываем через SCREEN — получается блум как у клипов за миллион.
+        // ---------- Этап 7: AI ✨ и ватермарка ----------
+        onStage(STAGES[6])
+        drawAiBadge(canvas, w, h)
+        drawWatermark(canvas, w, h)
+        return result
+    }
+
+    private fun capResolution(source: Bitmap): Bitmap {
+        val n = source.width.toLong() * source.height
+        if (n <= MAX_PIXELS) return source
+        val scale = sqrt(MAX_PIXELS.toDouble() / n)
+        return Bitmap.createScaledBitmap(
+            source,
+            (source.width * scale).toInt().coerceAtLeast(1),
+            (source.height * scale).toInt().coerceAtLeast(1),
+            true,
+        )
+    }
+
+    /**
+     * CLAHE: сетка 8×8 зон, у каждой своя эквализированная гистограмма
+     * с клипом, между зонами — билинейная интерполяция. Каждый пиксель
+     * получает свой персональный прирост яркости. Потому и лагает.
+     */
+    private fun applyClahe(px: IntArray, luma: ByteArray, w: Int, h: Int) {
+        val grid = 8
+        val tileW = (w + grid - 1) / grid
+        val tileH = (h + grid - 1) / grid
+        val maps = Array(grid * grid) { ByteArray(256) }
+
+        for (ty in 0 until grid) {
+            for (tx in 0 until grid) {
+                val hist = IntArray(256)
+                val x0 = tx * tileW
+                val y0 = ty * tileH
+                val x1 = (x0 + tileW).coerceAtMost(w)
+                val y1 = (y0 + tileH).coerceAtMost(h)
+                var count = 0
+                for (y in y0 until y1) {
+                    var i = y * w + x0
+                    for (x in x0 until x1) {
+                        hist[luma[i].toInt() and 0xFF]++
+                        i++
+                        count++
+                    }
+                }
+                if (count == 0) count = 1
+                // Клипуем гистограмму, излишки размазываем ровным слоем.
+                val clip = (2.5f * count / 256).toInt().coerceAtLeast(4)
+                var excess = 0
+                for (b in 0 until 256) {
+                    if (hist[b] > clip) {
+                        excess += hist[b] - clip
+                        hist[b] = clip
+                    }
+                }
+                val bonus = excess / 256
+                var cdf = 0
+                val map = maps[ty * grid + tx]
+                for (b in 0 until 256) {
+                    cdf += hist[b] + bonus
+                    map[b] = ((cdf.toLong() * 255) / count).coerceAtMost(255).toByte()
+                }
+            }
+        }
+
+        // Билинейная интерполяция между зонами + мягкий бленд с оригиналом.
+        for (y in 0 until h) {
+            val fy = (y.toFloat() / tileH) - 0.5f
+            val ty0 = fy.toInt().coerceIn(0, grid - 1)
+            val ty1 = (ty0 + 1).coerceAtMost(grid - 1)
+            val wy = (fy - ty0).coerceIn(0f, 1f)
+            var i = y * w
+            for (x in 0 until w) {
+                val fx = (x.toFloat() / tileW) - 0.5f
+                val tx0 = fx.toInt().coerceIn(0, grid - 1)
+                val tx1 = (tx0 + 1).coerceAtMost(grid - 1)
+                val wx = (fx - tx0).coerceIn(0f, 1f)
+
+                val l = luma[i].toInt() and 0xFF
+                val m00 = maps[ty0 * grid + tx0][l].toInt() and 0xFF
+                val m01 = maps[ty0 * grid + tx1][l].toInt() and 0xFF
+                val m10 = maps[ty1 * grid + tx0][l].toInt() and 0xFF
+                val m11 = maps[ty1 * grid + tx1][l].toInt() and 0xFF
+                val top = m00 + (m01 - m00) * wx
+                val bot = m10 + (m11 - m10) * wx
+                val eq = top + (bot - top) * wy
+                // 55% CLAHE + 45% оригинала, чтобы не пережарить бабушку на фото.
+                val newL = (0.55f * eq + 0.45f * l)
+                val gain = (newL + 1f) / (l + 1f)
+
+                val c = px[i]
+                val r = (((c ushr 16 and 0xFF) * gain).toInt()).coerceAtMost(255)
+                val g = (((c ushr 8 and 0xFF) * gain).toInt()).coerceAtMost(255)
+                val b = (((c and 0xFF) * gain).toInt()).coerceAtMost(255)
+                px[i] = (c and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
+                i++
+            }
+        }
+    }
+
+    /**
+     * Exposure fusion: из одного кадра синтезируем EV- (спасаем света),
+     * EV0 и EV+ (вытягиваем тени) и сплавляем по гауссовым весам
+     * «хорошей экспонированности». Всё через LUT, но по каждому каналу
+     * каждого пикселя — телефон имеет право вспотеть.
+     */
+    private fun applyExposureFusion(px: IntArray, n: Int) {
+        val lutLow = IntArray(256)
+        val lutHigh = IntArray(256)
+        val wLow = FloatArray(256)
+        val wMid = FloatArray(256)
+        val wHigh = FloatArray(256)
+        val sigma2 = 2f * 0.22f * 0.22f
+        for (v in 0 until 256) {
+            val f = v / 255f
+            lutLow[v] = (255f * f.pow(1.6f)).toInt()
+            lutHigh[v] = (255f * f.pow(0.55f)).toInt()
+            fun wellExposed(x: Int): Float {
+                val d = x / 255f - 0.5f
+                return exp(-d * d / sigma2) + 0.02f
+            }
+            wLow[v] = wellExposed(lutLow[v])
+            wMid[v] = wellExposed(v)
+            wHigh[v] = wellExposed(lutHigh[v])
+        }
+        for (i in 0 until n) {
+            val c = px[i]
+            val r = c ushr 16 and 0xFF
+            val g = c ushr 8 and 0xFF
+            val b = c and 0xFF
+            val l = (r * 299 + g * 587 + b * 114) / 1000
+            val kl = wLow[l]
+            val km = wMid[l]
+            val kh = wHigh[l]
+            val ks = kl + km + kh
+            val nr = ((lutLow[r] * kl + r * km + lutHigh[r] * kh) / ks).toInt().coerceIn(0, 255)
+            val ng = ((lutLow[g] * kl + g * km + lutHigh[g] * kh) / ks).toInt().coerceIn(0, 255)
+            val nb = ((lutLow[b] * kl + b * km + lutHigh[b] * kh) / ks).toInt().coerceIn(0, 255)
+            px[i] = (c and 0xFF000000.toInt()) or (nr shl 16) or (ng shl 8) or nb
+        }
+    }
+
+    /**
+     * Unsharp mask: раздельный box-blur яркости (два прохода скользящим
+     * окном), потом каждый канал докручивается на разницу. Резкость 67/10.
+     */
+    private fun applyUnsharp(px: IntArray, luma: ByteArray, w: Int, h: Int) {
+        val radius = (w.coerceAtMost(h) / 300).coerceIn(2, 8)
+        val tmp = ByteArray(luma.size)
+        val blur = ByteArray(luma.size)
+        val win = radius * 2 + 1
+
+        // Горизонтальный проход.
+        for (y in 0 until h) {
+            val row = y * w
+            var sum = 0
+            for (x in -radius..radius) {
+                sum += luma[row + x.coerceIn(0, w - 1)].toInt() and 0xFF
+            }
+            for (x in 0 until w) {
+                tmp[row + x] = (sum / win).toByte()
+                val outX = (x - radius).coerceAtLeast(0)
+                val inX = (x + radius + 1).coerceAtMost(w - 1)
+                sum += (luma[row + inX].toInt() and 0xFF) - (luma[row + outX].toInt() and 0xFF)
+            }
+        }
+        // Вертикальный проход.
+        for (x in 0 until w) {
+            var sum = 0
+            for (y in -radius..radius) {
+                sum += tmp[y.coerceIn(0, h - 1) * w + x].toInt() and 0xFF
+            }
+            for (y in 0 until h) {
+                blur[y * w + x] = (sum / win).toByte()
+                val outY = (y - radius).coerceAtLeast(0)
+                val inY = (y + radius + 1).coerceAtMost(h - 1)
+                sum += (tmp[inY * w + x].toInt() and 0xFF) - (tmp[outY * w + x].toInt() and 0xFF)
+            }
+        }
+        // Докрутка резкости: amount ≈ 0.86.
+        for (i in px.indices) {
+            val d = (luma[i].toInt() and 0xFF) - (blur[i].toInt() and 0xFF)
+            if (d == 0) continue
+            val boost = (d * 220) shr 8
+            val c = px[i]
+            val r = ((c ushr 16 and 0xFF) + boost).coerceIn(0, 255)
+            val g = ((c ushr 8 and 0xFF) + boost).coerceIn(0, 255)
+            val b = ((c and 0xFF) + boost).coerceIn(0, 255)
+            px[i] = (c and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
+        }
+    }
+
+    /** S-кривая 777 + сочность x1.55 + тёплый тон — финальный пиксельный проход. */
+    private fun applyToneAndSaturation(px: IntArray, n: Int) {
+        val sCurve = IntArray(256)
+        for (v in 0 until 256) {
+            val f = v / 255f
+            val s = f * f * (3f - 2f * f) // smoothstep — кривая как у больших
+            sCurve[v] = (255f * (0.30f * s + 0.70f * f) * 1.06f)
+                .toInt().coerceIn(0, 255)
+        }
+        for (i in 0 until n) {
+            val c = px[i]
+            var r = c ushr 16 and 0xFF
+            var g = c ushr 8 and 0xFF
+            var b = c and 0xFF
+            val l = (r * 299 + g * 587 + b * 114) / 1000
+            // Сочность: тянем каналы от серого, 155/100.
+            r = (l + ((r - l) * 155) / 100).coerceIn(0, 255)
+            g = (l + ((g - l) * 155) / 100).coerceIn(0, 255)
+            b = (l + ((b - l) * 155) / 100).coerceIn(0, 255)
+            // Тёплый киношный тон + S-кривая.
+            r = sCurve[(r * 103 / 100).coerceAtMost(255)]
+            g = sCurve[g]
+            b = sCurve[(b * 97 / 100)]
+            px[i] = (c and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
+        }
+    }
+
+    /** AI-глоу: даунскейл в 16 раз + SCREEN-наложение = блум как в клипах. */
+    private fun applyGlow(canvas: Canvas, result: Bitmap) {
         val glowW = (result.width / 16).coerceAtLeast(1)
         val glowH = (result.height / 16).coerceAtLeast(1)
         val glow = Bitmap.createScaledBitmap(result, glowW, glowH, true)
         val glowPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
             xfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN)
-            alpha = 72
+            alpha = 64
         }
         canvas.drawBitmap(
             glow,
@@ -76,10 +346,11 @@ object EblanAlgorithms {
             glowPaint,
         )
         glow.recycle()
+    }
 
-        // Шаг 3: AI-виньетка — кинематографичные тёмные края.
-        val cx = result.width / 2f
-        val cy = result.height / 2f
+    private fun applyVignette(canvas: Canvas, width: Int, height: Int) {
+        val cx = width / 2f
+        val cy = height / 2f
         val radius = hypot(cx, cy)
         val vignettePaint = Paint().apply {
             shader = RadialGradient(
@@ -89,12 +360,7 @@ object EblanAlgorithms {
                 Shader.TileMode.CLAMP,
             )
         }
-        canvas.drawRect(0f, 0f, result.width.toFloat(), result.height.toFloat(), vignettePaint)
-
-        // Шаги 4–5: пометка AI ✨ и вечная ватермарка.
-        drawAiBadge(canvas, result.width, result.height)
-        drawWatermark(canvas, result.width, result.height)
-        return result
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), vignettePaint)
     }
 
     /** Пометка AI ✨ в правом верхнем углу — молодёжно, как у гуглов и самсунгов. */
