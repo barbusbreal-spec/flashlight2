@@ -1,4 +1,5 @@
 <resources>
-    <color name="ic_launcher_background">#0B0B0F</color>
-    <color name="ic_launcher_lens">#7C4DFF</color>
+    <!-- Халяль-палитра: благородный зелёный, одобрено ✅ -->
+    <color name="ic_launcher_background">#0A5C2E</color>
+    <color name="ic_launcher_lens">#FFD34D</color>
 </resources>

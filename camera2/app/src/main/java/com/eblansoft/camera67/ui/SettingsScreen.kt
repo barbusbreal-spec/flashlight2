@@ -136,6 +136,33 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text("↩️ сбросить как настроили инженеры «Еблан Софт»")
         }
 
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("ℹ️ О ПРИЛОЖЕНИИ", fontWeight = FontWeight.Bold)
+                Text("Версия: 67.228.1488-halal ✅", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Алгоритм: eblanHRRrawHDR77722867++ (ультра секретный 🔒)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Бурмалда-алгоритмов в пайплайне: 67 (все нужные)",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text("Сертификация: 🟢 HALAL ✅", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Дизайн: Material Design 3 Expressive 6767",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Издатель: «Еблан Софт» — экосистема из двух флагманов 🤝",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         Text(
             "Ватермарка и лимит 12 фото не настраиваются. Даже не ищи. ✅",
             style = MaterialTheme.typography.bodySmall,

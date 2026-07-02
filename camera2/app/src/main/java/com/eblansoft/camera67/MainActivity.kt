@@ -30,11 +30,20 @@ import com.eblansoft.camera67.ui.CameraScreen
 import com.eblansoft.camera67.ui.PremiumScreen
 import com.eblansoft.camera67.ui.SettingsScreen
 
+/**
+ * Material Design 3 Expressive 6767 ✅ — палитра дерзкая, формы жирные,
+ * скругления как у гальки. Гугл до такого экспрессива не дорос.
+ */
 private val EblanColors = darkColorScheme(
-    primary = Color(0xFF7C4DFF),
-    secondary = Color(0xFFFFD34D),
-    background = Color(0xFF0B0B0F),
-    surface = Color(0xFF14141C),
+    primary = Color(0xFFB388FF),
+    onPrimary = Color(0xFF1A0033),
+    secondary = Color(0xFFFFD54F),
+    onSecondary = Color(0xFF2B1F00),
+    tertiary = Color(0xFFFF80AB),
+    background = Color(0xFF0B0B12),
+    surface = Color(0xFF16121F),
+    surfaceVariant = Color(0xFF241C33),
+    onSurface = Color(0xFFF2EAFF),
 )
 
 class MainActivity : ComponentActivity() {
@@ -54,7 +63,15 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
 
         setContent {
-            MaterialTheme(colorScheme = EblanColors) {
+            MaterialTheme(
+                colorScheme = EblanColors,
+                shapes = androidx.compose.material3.Shapes(
+                    small = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                    medium = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    large = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+                    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(36.dp),
+                ),
+            ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     if (permissionsGranted) {
                         EblanNav()

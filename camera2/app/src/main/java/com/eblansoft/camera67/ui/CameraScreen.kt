@@ -96,6 +96,17 @@ private val ZOOM_LABELS = listOf("1x", "2x", "4x", "10x", "67x", "1488x🚀")
 
 private val TIMER_OPTIONS = listOf(0, 3, 10)
 
+/** После такой фотки положен комплимент. Научно обоснованно. */
+private val COMPLIMENTS = listOf(
+    "Пацаны в шоке 🤯",
+    "Гугл уже плачет 😭",
+    "Это фото повесят в Лувре 🖼",
+    "За такое дают нобелевку 🏆",
+    "Мама будет гордиться ❤️",
+    "Ебейшесть зашкалила ⚡",
+    "ОКАК 😳",
+)
+
 @Composable
 fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
@@ -109,8 +120,8 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
 
     var statusMessage by remember { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
-    var processingStage by remember { mutableStateOf(EblanAlgorithms.STAGES.first()) }
     var showLimitDialog by remember { mutableStateOf(false) }
+    var meme67 by remember { mutableStateOf(EblanAlgorithms.meme67Enabled) }
 
     var recording by remember { mutableStateOf<Recording?>(null) }
     var recordSeconds by remember { mutableIntStateOf(0) }
@@ -261,16 +272,11 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
         scope.launch {
             val startedAt = System.currentTimeMillis()
 
-            // HDR RAW 67228+++++: снимаем реальный стек с EV-брекетингом.
+            // HDR RAW: снимаем реальный стек с EV-брекетингом. Что происходит
+            // дальше — не покажем: алгоритм ультра секретный 🔒
             val evList = buildEvList(cam, prefs.burstFrames)
             val shots = mutableListOf<Pair<ByteArray, Int>>()
-            for ((idx, ev) in evList.withIndex()) {
-                processingStage = if (evList.size > 1) {
-                    "HDR RAW: кадр ${idx + 1}/${evList.size}" +
-                        (ev?.let { " (EV $it)" } ?: "") + " 📸"
-                } else {
-                    EblanAlgorithms.STAGES.first()
-                }
+            for (ev in evList) {
                 if (ev != null && cam != null) {
                     runCatching { cam.cameraControl.setExposureCompensationIndex(ev) }
                     delay(180) // даём экспозиции устаканиться, как учили деды
@@ -292,9 +298,7 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
                     val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     EblanAlgorithms.rotate(raw, rotation)
                 }
-                val masterpiece = EblanAlgorithms.process(frames, config) { stage ->
-                    processingStage = stage
-                }
+                val masterpiece = EblanAlgorithms.process(frames, config)
                 EblanAlgorithms.saveToGallery(context, masterpiece, prefs.jpegQuality)
             }
             val lagSec = (System.currentTimeMillis() - startedAt) / 1000f
@@ -302,13 +306,14 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
             if (saved != null) {
                 prefs.registerPhoto()
                 photosLeft = prefs.photosLeft()
+                vibrate(context)
                 statusMessage =
-                    "AI ✨ ${EblanAlgorithms.MODE_NAME}: стек ${shots.size} кадров " +
-                        "сплавлен, фотка ебейшая ✅✅✅ " +
+                    "${COMPLIMENTS.random()} Стек ${shots.size} кадров, " +
+                        "67 бурмалда-алгоритмов, секретный ${EblanAlgorithms.MODE_NAME} ✅✅✅ " +
                         "Нейросеть страдала %.1f сек 🥵 Осталось $photosLeft/12"
                             .format(lagSec)
             } else {
-                statusMessage = "Не сохранилось 💀 (даже AI 777 бессилен)"
+                statusMessage = "Не сохранилось 💀 (даже бурмалда бессильна)"
             }
         }
     }
@@ -349,6 +354,7 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
     }
 
     fun onShutterPressed() {
+        vibrate(context) // тактильная ебейшесть
         if (isVideoMode) {
             toggleRecording()
             return
@@ -434,6 +440,16 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
             isVideoMode = isVideoMode,
             isRecording = recording != null,
             isProcessing = isProcessing,
+            meme67 = meme67,
+            onToggleMeme = {
+                meme67 = !meme67
+                EblanAlgorithms.meme67Enabled = meme67
+                statusMessage = if (meme67) {
+                    "Мемасик 67 включён ОКАК ✅✅✅ Теперь на фото И на видео 🤝"
+                } else {
+                    "Мемасик 67 выключен 😔 (зачем ты так)"
+                }
+            },
             zoomIndex = zoomIndex,
             night777 = night777,
             beauty67 = beauty67,
@@ -465,10 +481,7 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
         )
 
         if (isProcessing) {
-            AiProcessingOverlay(
-                stage = processingStage,
-                modifier = Modifier.align(Alignment.Center),
-            )
+            SecretProcessingOverlay(modifier = Modifier.align(Alignment.Center))
         }
 
         if (showLimitDialog) {
@@ -574,13 +587,16 @@ private fun TopBar(
             )
             Pill(text = "📸 $photosLeft/12", bold = true)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Единственный режим. Переключалок нет и не будет — сразу максимум.
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Единственный режим. Полное имя алгоритма не пишем — секретный.
             Pill(
                 text = if (isVideoMode) {
                     "✨ AI ${EblanAlgorithms.VIDEO_FPS_LABEL} ✅"
                 } else {
-                    "✨ AI ${EblanAlgorithms.MODE_NAME} ✅"
+                    "✨ AI 67228++ 🔒"
                 },
                 color = Color(0xB3311B92),
                 bold = true,
@@ -589,6 +605,11 @@ private fun TopBar(
                 text = "⚡LAG LVL $lagLevel",
                 color = if (lagLevel > 0) Color(0xCCB71C1C) else Color(0x99000000),
                 bold = lagLevel > 0,
+            )
+            Pill(
+                text = "🟢 HALAL ✅",
+                color = Color(0xCC0A5C2E),
+                bold = true,
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -630,6 +651,8 @@ private fun BottomBar(
     isVideoMode: Boolean,
     isRecording: Boolean,
     isProcessing: Boolean,
+    meme67: Boolean,
+    onToggleMeme: () -> Unit,
     zoomIndex: Int,
     night777: Boolean,
     beauty67: Boolean,
@@ -663,6 +686,14 @@ private fun BottomBar(
                 .padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // Кнопка 67: мемасик с галочками на фото И видео. ОКАК.
+            Pill(
+                text = if (meme67) "67 ОКАК ✅" else "67",
+                color = if (meme67) Color(0xE6FFD54F) else Color(0x99000000),
+                textColor = if (meme67) Color.Black else Color(0xFFFFD54F),
+                bold = true,
+                onClick = onToggleMeme,
+            )
             EffectPill("🌙 НОЧНОЙ 777", night777) { onToggleEffect("night") }
             EffectPill("💅 БЬЮТИ 67", beauty67) { onToggleEffect("beauty") }
             EffectPill("🖤 ЧБ ДЕРЗКИЙ", bwDerzkiy) { onToggleEffect("bw") }
@@ -768,31 +799,54 @@ private fun ShutterButton(
     )
 }
 
+/**
+ * Оверлей обработки без прогресса: алгоритм ультра секретный.
+ * Показывать этапы — значит раскрыть гостайну «Еблан Софт».
+ */
 @Composable
-private fun AiProcessingOverlay(stage: String, modifier: Modifier = Modifier) {
+private fun SecretProcessingOverlay(modifier: Modifier = Modifier) {
+    var dots by remember { mutableIntStateOf(1) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(400)
+            dots = dots % 3 + 1
+        }
+    }
     Column(
         modifier = modifier
             .padding(horizontal = 32.dp)
-            .background(Color(0xE60B0B0F), RoundedCornerShape(24.dp))
+            .background(Color(0xE60B0B0F), RoundedCornerShape(28.dp))
             .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("✨", style = MaterialTheme.typography.displaySmall)
-        CircularProgressIndicator(color = Color(0xFF7C4DFF))
+        Text("🔒", style = MaterialTheme.typography.displaySmall)
+        CircularProgressIndicator(color = Color(0xFFB388FF))
         Text(
-            "AI ${EblanAlgorithms.MODE_NAME}",
+            EblanAlgorithms.MODE_NAME,
             color = Color.White,
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.titleMedium,
         )
-        // Это не анимация для красоты — реальный этап пайплайна прямо сейчас.
         Text(
-            stage,
+            "Обработка засекречена" + ".".repeat(dots) + "\n" +
+                "67 бурмалда-алгоритмов работают. Что они делают —\n" +
+                "не скажем даже под пытками ✅✅✅",
             color = Color(0xFFCCCCDD),
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.height(40.dp),
+        )
+    }
+}
+
+/** Вибро-отклик 67: короткий, дерзкий, тактильный. */
+private fun vibrate(context: Context) {
+    val vibrator = context.getSystemService(android.os.Vibrator::class.java) ?: return
+    runCatching {
+        vibrator.vibrate(
+            android.os.VibrationEffect.createOneShot(
+                30, android.os.VibrationEffect.DEFAULT_AMPLITUDE
+            )
         )
     }
 }

@@ -61,8 +61,33 @@ data class EblanConfig(
  */
 object EblanAlgorithms {
 
-    const val MODE_NAME = "777 HDR RAW 67228+++++"
+    const val MODE_NAME = "eblanHRRrawHDR77722867++"
     const val VIDEO_FPS_LABEL = "8771828fps"
+
+    /**
+     * Кнопка 67: мемасик на фото и видео. @Volatile, потому что читают
+     * и пиксельный конвейер, и видео-оверлей, и UI — все хотят ОКАК.
+     */
+    @Volatile
+    var meme67Enabled = false
+
+    /** Сюда складываем результаты бурмалда-алгоритмов, чтобы JIT их не выкинул. */
+    @Volatile
+    private var burmaldaSink = 0L
+
+    /** Имена бурмалда-алгоритмов. Что делают — коммерческая тайна (ничего). */
+    private val BURMALDA = listOf(
+        "Квантовая стабилизация бурмалды",
+        "Блокчейн-верификация кадра",
+        "Дефрагментация пикселей",
+        "Нейро-аура 67",
+        "Анти-кринж фильтр",
+        "Согласование с вайбом",
+        "Реверс-энтропия",
+        "Каскадная сверка галочек ✅",
+        "Пре-рендер ОКАК",
+        "Пост-квантовый шумодав имени деда",
+    )
 
     /** Максимум мегапикселей в обработку — чтобы лагало, но не умирало. */
     private const val MAX_PIXELS = 12_500_000
@@ -156,6 +181,11 @@ object EblanAlgorithms {
         onStage(STAGES[4])
         applyToneAndSaturation(px, n, config.juiciness, config.warmth)
 
+        // ---------- Бурмалда-блок: 67 алгоритмов, все важные ----------
+        // Прогресс не показываем: алгоритм eblanHRRrawHDR77722867++
+        // ультра секретный. Но вычисления реальные — лаг честный.
+        runBurmalda(px, n)
+
         // ---------- Бонусные лаг-режимы ----------
         if (config.bwDerzkiy) {
             onStage("БОНУС: ЧБ ДЕРЗКИЙ 🖤 цвет для слабых")
@@ -192,7 +222,88 @@ object EblanAlgorithms {
         onStage(STAGES[6])
         drawAiBadge(canvas, w, h)
         drawWatermark(canvas, w, h)
+        if (meme67Enabled) {
+            drawMeme67(canvas, w, h)
+        }
         return result
+    }
+
+    /**
+     * 67 бурмалда-алгоритмов. Каждый делает реальный проход по пикселям
+     * (checksum, гистограммы, чётность, XOR-свёртки) и складывает результат
+     * в burmaldaSink, откуда его никто никогда не заберёт. Главное — что
+     * алгоритмы ЕСТЬ. ✅✅✅
+     */
+    private fun runBurmalda(px: IntArray, n: Int) {
+        var sink = burmaldaSink
+        val hist = IntArray(256)
+        for (algo in 0 until 67) {
+            val stride = 5 + (algo % 7)
+            when (algo % 5) {
+                0 -> { // блокчейн-верификация (контрольная сумма)
+                    var s = 0L
+                    var i = algo % stride
+                    while (i < n) { s += px[i] and 0xFFFFFF; i += stride }
+                    sink = sink xor s
+                }
+                1 -> { // нейро-аура (гистограмма яркости)
+                    var i = algo % stride
+                    while (i < n) {
+                        val c = px[i]
+                        hist[((c ushr 16 and 0xFF) * 299 +
+                            (c ushr 8 and 0xFF) * 587 +
+                            (c and 0xFF) * 114) / 1000]++
+                        i += stride
+                    }
+                    sink += hist[algo * 3 % 256]
+                }
+                2 -> { // каскадная сверка галочек (XOR-свёртка)
+                    var x = 0
+                    var i = algo % stride
+                    while (i < n) { x = x xor px[i]; i += stride }
+                    sink = sink xor x.toLong()
+                }
+                3 -> { // дефрагментация пикселей (поиск максимума)
+                    var m = 0
+                    var i = algo % stride
+                    while (i < n) { if (px[i] and 0xFF > m) m = px[i] and 0xFF; i += stride }
+                    sink += m
+                }
+                else -> { // анти-кринж фильтр (подсчёт чётных пикселей)
+                    var even = 0
+                    var i = algo % stride
+                    while (i < n) { if (px[i] and 1 == 0) even++; i += stride }
+                    sink += even.toLong()
+                }
+            }
+        }
+        burmaldaSink = sink + BURMALDA.size // имена тоже участвуют
+    }
+
+    /** Кнопка 67: молодёжный мемасик с галочками. ОКАК. */
+    private fun drawMeme67(canvas: Canvas, width: Int, height: Int) {
+        val base = (width.coerceAtMost(height)) / 5f
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = base
+            isFakeBoldText = true
+            textAlign = Paint.Align.CENTER
+            setShadowLayer(base / 5f, 0f, base / 10f, Color.BLACK)
+        }
+        canvas.save()
+        canvas.rotate(-12f, width / 2f, height / 3f)
+        canvas.drawText("67 ✅✅✅", width / 2f, height / 3f, paint)
+        paint.textSize = base * 0.55f
+        canvas.drawText("ОКАК 🤝", width / 2f, height / 3f + base * 0.75f, paint)
+        paint.textSize = base * 0.25f
+        paint.alpha = 220
+        canvas.drawText(
+            "сертифицировано пацанами",
+            width / 2f,
+            height / 3f + base * 1.15f,
+            paint,
+        )
+        canvas.restore()
     }
 
     /**
@@ -204,6 +315,9 @@ object EblanAlgorithms {
         applyVignette(canvas, width, height)
         drawAiBadge(canvas, width, height, "AI ✨ $VIDEO_FPS_LABEL")
         drawWatermark(canvas, width, height)
+        if (meme67Enabled) {
+            drawMeme67(canvas, width, height)
+        }
     }
 
     /** Центр-кроп + растяжка обратно: честный цифровой зум. На 1488x — пиксель-арт. */
