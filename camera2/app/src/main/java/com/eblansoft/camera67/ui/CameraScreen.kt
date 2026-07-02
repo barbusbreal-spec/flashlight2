@@ -97,7 +97,7 @@ private val ZOOM_LABELS = listOf("1x", "2x", "4x", "10x", "67x", "1488x🚀")
 private val TIMER_OPTIONS = listOf(0, 3, 10)
 
 @Composable
-fun CameraScreen(onOpenPremium: () -> Unit) {
+fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -146,6 +146,11 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
             sepiaPacan = sepiaPacan,
             fisheye = fisheye,
             glitch2007 = glitch2007,
+            juiciness = prefs.juiciness,
+            sharpness = prefs.sharpness,
+            glowAlpha = prefs.glowAlpha,
+            vignette = prefs.vignette,
+            warmth = prefs.warmth,
         )
     }
 
@@ -251,47 +256,61 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         }
         val capture = imageCapture ?: return
         val config = buildConfig()
+        val cam = camera
         isProcessing = true
-        processingStage = EblanAlgorithms.STAGES.first()
-        capture.takePicture(
-            ContextCompat.getMainExecutor(context),
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-                    val rotation = image.imageInfo.rotationDegrees
-                    image.close()
-                    scope.launch {
-                        val startedAt = System.currentTimeMillis()
-                        val saved = withContext(Dispatchers.Default) {
-                            val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            val upright = EblanAlgorithms.rotate(raw, rotation)
-                            val masterpiece = EblanAlgorithms.process(upright, config) { stage ->
-                                processingStage = stage
-                            }
-                            EblanAlgorithms.saveToGallery(context, masterpiece)
-                        }
-                        val lagSec = (System.currentTimeMillis() - startedAt) / 1000f
-                        isProcessing = false
-                        if (saved != null) {
-                            prefs.registerPhoto()
-                            photosLeft = prefs.photosLeft()
-                            statusMessage =
-                                "AI ✨ ${EblanAlgorithms.MODE_NAME}: фотка ебейшая ✅✅✅ " +
-                                    "Нейросеть страдала %.1f сек 🥵 Осталось $photosLeft/12"
-                                        .format(lagSec)
-                        } else {
-                            statusMessage = "Не сохранилось 💀 (даже AI 777 бессилен)"
-                        }
-                    }
-                }
+        scope.launch {
+            val startedAt = System.currentTimeMillis()
 
-                override fun onError(exception: ImageCaptureException) {
-                    isProcessing = false
-                    statusMessage = "Камера сказала нет 💀 ${exception.imageCaptureError}"
+            // HDR RAW 67228+++++: снимаем реальный стек с EV-брекетингом.
+            val evList = buildEvList(cam, prefs.burstFrames)
+            val shots = mutableListOf<Pair<ByteArray, Int>>()
+            for ((idx, ev) in evList.withIndex()) {
+                processingStage = if (evList.size > 1) {
+                    "HDR RAW: кадр ${idx + 1}/${evList.size}" +
+                        (ev?.let { " (EV $it)" } ?: "") + " 📸"
+                } else {
+                    EblanAlgorithms.STAGES.first()
                 }
+                if (ev != null && cam != null) {
+                    runCatching { cam.cameraControl.setExposureCompensationIndex(ev) }
+                    delay(180) // даём экспозиции устаканиться, как учили деды
+                }
+                captureOne(capture, context)?.let { shots += it }
             }
-        )
+            if (cam != null) {
+                runCatching { cam.cameraControl.setExposureCompensationIndex(0) }
+            }
+
+            if (shots.isEmpty()) {
+                isProcessing = false
+                statusMessage = "Камера сказала нет 💀 стек не снялся"
+                return@launch
+            }
+
+            val saved = withContext(Dispatchers.Default) {
+                val frames = shots.map { (bytes, rotation) ->
+                    val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    EblanAlgorithms.rotate(raw, rotation)
+                }
+                val masterpiece = EblanAlgorithms.process(frames, config) { stage ->
+                    processingStage = stage
+                }
+                EblanAlgorithms.saveToGallery(context, masterpiece, prefs.jpegQuality)
+            }
+            val lagSec = (System.currentTimeMillis() - startedAt) / 1000f
+            isProcessing = false
+            if (saved != null) {
+                prefs.registerPhoto()
+                photosLeft = prefs.photosLeft()
+                statusMessage =
+                    "AI ✨ ${EblanAlgorithms.MODE_NAME}: стек ${shots.size} кадров " +
+                        "сплавлен, фотка ебейшая ✅✅✅ " +
+                        "Нейросеть страдала %.1f сек 🥵 Осталось $photosLeft/12"
+                            .format(lagSec)
+            } else {
+                statusMessage = "Не сохранилось 💀 (даже AI 777 бессилен)"
+            }
+        }
     }
 
     fun toggleRecording() {
@@ -383,6 +402,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
                 }
             },
             onOpenPremium = onOpenPremium,
+            onOpenSettings = onOpenSettings,
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
@@ -526,6 +546,7 @@ private fun TopBar(
     onCycleTimer: () -> Unit,
     onOpenFlashlight: () -> Unit,
     onOpenPremium: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -589,6 +610,7 @@ private fun TopBar(
             )
             // Экосистема «Еблан Софт»: запуск второго флагмана.
             Pill(text = "🔦Ф2", onClick = onOpenFlashlight)
+            Pill(text = "⚙️", onClick = onOpenSettings)
         }
         if (isRecording) {
             val limitLabel = if (prefs.isPremium) "БЕЗЛИМИТ (до 1:00) 🤝" else "лимит 1:00"
@@ -772,6 +794,51 @@ private fun AiProcessingOverlay(stage: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.height(40.dp),
         )
+    }
+}
+
+/** Один кадр HDR RAW стека: suspend-обёртка над takePicture. */
+private suspend fun captureOne(
+    capture: ImageCapture,
+    context: Context,
+): Pair<ByteArray, Int>? {
+    return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        capture.takePicture(
+            ContextCompat.getMainExecutor(context),
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
+                    val rotation = image.imageInfo.rotationDegrees
+                    image.close()
+                    cont.resume(bytes to rotation) { }
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    cont.resume(null) { }
+                }
+            }
+        )
+    }
+}
+
+/**
+ * EV-план стека: недодержка (спасает света) + центр + передержка (тянет
+ * тени). Если железо брекетинг не умеет — снимаем одинаковые кадры,
+ * сплав превращается в шумодав 67. Тоже польза.
+ */
+private fun buildEvList(camera: Camera?, frames: Int): List<Int?> {
+    if (frames <= 1) return listOf(null)
+    val state = camera?.cameraInfo?.exposureState
+    if (state == null || !state.isExposureCompensationSupported) {
+        return List(frames) { null }
+    }
+    val lo = state.exposureCompensationRange.lower
+    val hi = state.exposureCompensationRange.upper
+    return if (frames >= 5) {
+        listOf(lo, lo / 2, 0, hi / 2, hi)
+    } else {
+        listOf(lo / 2, 0, hi / 2)
     }
 }
 

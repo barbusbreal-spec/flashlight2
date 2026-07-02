@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.eblansoft.camera67.ui.CameraScreen
 import com.eblansoft.camera67.ui.PremiumScreen
+import com.eblansoft.camera67.ui.SettingsScreen
 
 private val EblanColors = darkColorScheme(
     primary = Color(0xFF7C4DFF),
@@ -73,13 +74,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private enum class EblanScreen { Camera, Premium, Settings }
+
 @Composable
 private fun EblanNav() {
-    var showPremium by remember { mutableStateOf(false) }
-    if (showPremium) {
-        PremiumScreen(onBack = { showPremium = false })
-    } else {
-        CameraScreen(onOpenPremium = { showPremium = true })
+    var screen by remember { mutableStateOf(EblanScreen.Camera) }
+    when (screen) {
+        EblanScreen.Premium -> PremiumScreen(onBack = { screen = EblanScreen.Camera })
+        EblanScreen.Settings -> SettingsScreen(onBack = { screen = EblanScreen.Camera })
+        EblanScreen.Camera -> CameraScreen(
+            onOpenPremium = { screen = EblanScreen.Premium },
+            onOpenSettings = { screen = EblanScreen.Settings },
+        )
     }
 }
 

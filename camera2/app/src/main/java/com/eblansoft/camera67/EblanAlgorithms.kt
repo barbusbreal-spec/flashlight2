@@ -36,6 +36,12 @@ data class EblanConfig(
     val sepiaPacan: Boolean = false,
     val fisheye: Boolean = false,
     val glitch2007: Boolean = false,
+    // Крутилки ебейшести из настроек:
+    val juiciness: Int = 155,   // сочность, %
+    val sharpness: Int = 86,    // резкость, %
+    val glowAlpha: Int = 64,    // сила глоу, 0..128
+    val vignette: Int = 45,     // виньетка, %
+    val warmth: Int = 3,        // теплота, -10..10
 ) {
     val lagLevel: Int
         get() = listOf(night777, beauty67, bwDerzkiy, sepiaPacan, fisheye, glitch2007)
@@ -55,7 +61,7 @@ data class EblanConfig(
  */
 object EblanAlgorithms {
 
-    const val MODE_NAME = "777 67 УЛЬТРА++++"
+    const val MODE_NAME = "777 HDR RAW 67228+++++"
     const val VIDEO_FPS_LABEL = "8771828fps"
 
     /** Максимум мегапикселей в обработку — чтобы лагало, но не умирало. */
@@ -71,27 +77,58 @@ object EblanAlgorithms {
         "Этап 7/7: пометка AI ✨ и ватермарка 🤝",
     )
 
+    /**
+     * Вход — стек реальных кадров с EV-брекетингом (HDR RAW 67228+++++).
+     * Один кадр — тоже стек, просто грустный.
+     */
     fun process(
-        source: Bitmap,
+        frames: List<Bitmap>,
         config: EblanConfig = EblanConfig(),
         onStage: (String) -> Unit = {},
     ): Bitmap {
-        // ---------- Зум 1488x: дорезаем пиксели поверх железа ----------
-        var input = source
-        if (config.digitalZoom > 1.01f) {
-            onStage("БОНУС: зум ×%.0f — нарезаем пиксели 🚀".format(config.digitalZoom))
-            input = digitalZoom(input, config.digitalZoom)
-        }
+        require(frames.isNotEmpty()) { "нейросети нужен хотя бы один кадр, брат" }
 
-        // ---------- Этап 1: пиксели и яркость ----------
+        // ---------- Этап 1: стек кадров → пиксели ----------
         onStage(STAGES[0])
-        val capped = capResolution(input)
-        val w = capped.width
-        val h = capped.height
+        // Чем больше кадров в стеке, тем скромнее размер каждого — чтобы
+        // лагало от алгоритмов, а не от OutOfMemoryError.
+        val perFramePixels = (MAX_PIXELS / frames.size).coerceAtLeast(2_000_000)
+
+        var w = 0
+        var h = 0
+        val stack = frames.mapIndexed { idx, frame ->
+            var input = frame
+            if (config.digitalZoom > 1.01f) {
+                if (idx == 0) {
+                    onStage("БОНУС: зум ×%.0f — нарезаем пиксели 🚀".format(config.digitalZoom))
+                }
+                input = digitalZoom(input, config.digitalZoom)
+            }
+            val capped = capResolution(input, perFramePixels)
+            if (idx == 0) {
+                w = capped.width
+                h = capped.height
+            }
+            val sized = if (capped.width != w || capped.height != h) {
+                val s = Bitmap.createScaledBitmap(capped, w, h, true)
+                if (capped !== frame) capped.recycle()
+                s
+            } else capped
+            val arr = IntArray(w * h)
+            sized.getPixels(arr, 0, w, 0, 0, w, h)
+            if (sized !== frame) sized.recycle()
+            arr
+        }
         val n = w * h
-        val px = IntArray(n)
-        capped.getPixels(px, 0, w, 0, 0, w, h)
-        if (capped !== source) capped.recycle()
+
+        // ---------- HDR RAW: сплав реального стека по Мертенсу ----------
+        val px: IntArray
+        if (stack.size > 1) {
+            onStage("HDR RAW 67228: сплавляем стек из ${stack.size} кадров 🥞")
+            px = fuseStack(stack, n)
+        } else {
+            px = stack[0]
+        }
 
         if (config.night777) {
             onStage("БОНУС: НОЧНОЙ 777 🌙 вытягиваем тени из подвала")
@@ -112,12 +149,12 @@ object EblanAlgorithms {
         // ---------- Этап 4: unsharp mask ----------
         onStage(STAGES[3])
         fillLuma(px, luma, n)
-        applyUnsharp(px, luma, w, h)
+        applyUnsharp(px, luma, w, h, config.sharpness)
         luma = ByteArray(0) // нейросеть освобождает память как умеет
 
         // ---------- Этап 5: тон-кривая + сочность ----------
         onStage(STAGES[4])
-        applyToneAndSaturation(px, n)
+        applyToneAndSaturation(px, n, config.juiciness, config.warmth)
 
         // ---------- Бонусные лаг-режимы ----------
         if (config.bwDerzkiy) {
@@ -148,8 +185,8 @@ object EblanAlgorithms {
 
         // ---------- Этап 6: глоу + виньетка ----------
         onStage(STAGES[5])
-        applyGlow(canvas, result)
-        applyVignette(canvas, w, h)
+        applyGlow(canvas, result, config.glowAlpha)
+        applyVignette(canvas, w, h, config.vignette)
 
         // ---------- Этап 7: AI ✨ и ватермарка ----------
         onStage(STAGES[6])
@@ -190,10 +227,48 @@ object EblanAlgorithms {
         }
     }
 
-    private fun capResolution(source: Bitmap): Bitmap {
+    /**
+     * Сплав реального HDR RAW стека по упрощённому Мертенсу: каждый кадр
+     * голосует за пиксель гауссовым весом «хорошей экспонированности».
+     * Недодержанный кадр спасает света, передержанный — тени. Как HDR+
+     * у гугла, только плюсов больше на 67228.
+     */
+    private fun fuseStack(stack: List<IntArray>, n: Int): IntArray {
+        val weightLut = FloatArray(256)
+        val sigma2 = 2f * 0.2f * 0.2f
+        for (v in 0 until 256) {
+            val d = v / 255f - 0.5f
+            weightLut[v] = exp(-d * d / sigma2) + 0.05f
+        }
+        val out = IntArray(n)
+        for (i in 0 until n) {
+            var sw = 0f
+            var sr = 0f
+            var sg = 0f
+            var sb = 0f
+            for (f in stack.indices) {
+                val c = stack[f][i]
+                val r = c ushr 16 and 0xFF
+                val g = c ushr 8 and 0xFF
+                val b = c and 0xFF
+                val wt = weightLut[(r * 299 + g * 587 + b * 114) / 1000]
+                sw += wt
+                sr += r * wt
+                sg += g * wt
+                sb += b * wt
+            }
+            out[i] = 0xFF000000.toInt() or
+                ((sr / sw).toInt().coerceIn(0, 255) shl 16) or
+                ((sg / sw).toInt().coerceIn(0, 255) shl 8) or
+                (sb / sw).toInt().coerceIn(0, 255)
+        }
+        return out
+    }
+
+    private fun capResolution(source: Bitmap, maxPixels: Int = MAX_PIXELS): Bitmap {
         val n = source.width.toLong() * source.height
-        if (n <= MAX_PIXELS) return source
-        val scale = sqrt(MAX_PIXELS.toDouble() / n)
+        if (n <= maxPixels) return source
+        val scale = sqrt(maxPixels.toDouble() / n)
         return Bitmap.createScaledBitmap(
             source,
             (source.width * scale).toInt().coerceAtLeast(1),
@@ -422,7 +497,9 @@ object EblanAlgorithms {
      * Unsharp mask: раздельный box-blur яркости (два прохода скользящим
      * окном), потом каждый канал докручивается на разницу. Резкость 67/10.
      */
-    private fun applyUnsharp(px: IntArray, luma: ByteArray, w: Int, h: Int) {
+    private fun applyUnsharp(px: IntArray, luma: ByteArray, w: Int, h: Int, sharpness: Int) {
+        if (sharpness <= 0) return
+        val amount256 = (sharpness * 256) / 100
         val radius = (w.coerceAtMost(h) / 300).coerceIn(2, 8)
         val tmp = ByteArray(luma.size)
         val blur = ByteArray(luma.size)
@@ -455,11 +532,11 @@ object EblanAlgorithms {
                 sum += (tmp[inY * w + x].toInt() and 0xFF) - (tmp[outY * w + x].toInt() and 0xFF)
             }
         }
-        // Докрутка резкости: amount ≈ 0.86.
+        // Докрутка резкости: сила из настроек.
         for (i in px.indices) {
             val d = (luma[i].toInt() and 0xFF) - (blur[i].toInt() and 0xFF)
             if (d == 0) continue
-            val boost = (d * 220) shr 8
+            val boost = (d * amount256) shr 8
             val c = px[i]
             val r = ((c ushr 16 and 0xFF) + boost).coerceIn(0, 255)
             val g = ((c ushr 8 and 0xFF) + boost).coerceIn(0, 255)
@@ -468,8 +545,8 @@ object EblanAlgorithms {
         }
     }
 
-    /** S-кривая 777 + сочность x1.55 + тёплый тон — финальный пиксельный проход. */
-    private fun applyToneAndSaturation(px: IntArray, n: Int) {
+    /** S-кривая 777 + сочность + тёплый тон из настроек — финальный пиксельный проход. */
+    private fun applyToneAndSaturation(px: IntArray, n: Int, juiciness: Int, warmth: Int) {
         val sCurve = IntArray(256)
         for (v in 0 until 256) {
             val f = v / 255f
@@ -477,32 +554,35 @@ object EblanAlgorithms {
             sCurve[v] = (255f * (0.30f * s + 0.70f * f) * 1.06f)
                 .toInt().coerceIn(0, 255)
         }
+        val warmR = 100 + warmth
+        val warmB = 100 - warmth
         for (i in 0 until n) {
             val c = px[i]
             var r = c ushr 16 and 0xFF
             var g = c ushr 8 and 0xFF
             var b = c and 0xFF
             val l = (r * 299 + g * 587 + b * 114) / 1000
-            // Сочность: тянем каналы от серого, 155/100.
-            r = (l + ((r - l) * 155) / 100).coerceIn(0, 255)
-            g = (l + ((g - l) * 155) / 100).coerceIn(0, 255)
-            b = (l + ((b - l) * 155) / 100).coerceIn(0, 255)
+            // Сочность: тянем каналы от серого на juiciness процентов.
+            r = (l + ((r - l) * juiciness) / 100).coerceIn(0, 255)
+            g = (l + ((g - l) * juiciness) / 100).coerceIn(0, 255)
+            b = (l + ((b - l) * juiciness) / 100).coerceIn(0, 255)
             // Тёплый киношный тон + S-кривая.
-            r = sCurve[(r * 103 / 100).coerceAtMost(255)]
+            r = sCurve[(r * warmR / 100).coerceIn(0, 255)]
             g = sCurve[g]
-            b = sCurve[(b * 97 / 100)]
+            b = sCurve[(b * warmB / 100).coerceIn(0, 255)]
             px[i] = (c and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
         }
     }
 
     /** AI-глоу: даунскейл в 16 раз + SCREEN-наложение = блум как в клипах. */
-    private fun applyGlow(canvas: Canvas, result: Bitmap) {
+    private fun applyGlow(canvas: Canvas, result: Bitmap, glowAlpha: Int = 64) {
+        if (glowAlpha <= 0) return
         val glowW = (result.width / 16).coerceAtLeast(1)
         val glowH = (result.height / 16).coerceAtLeast(1)
         val glow = Bitmap.createScaledBitmap(result, glowW, glowH, true)
         val glowPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
             xfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN)
-            alpha = 64
+            alpha = glowAlpha.coerceIn(1, 255)
         }
         canvas.drawBitmap(
             glow,
@@ -513,14 +593,16 @@ object EblanAlgorithms {
         glow.recycle()
     }
 
-    private fun applyVignette(canvas: Canvas, width: Int, height: Int) {
+    private fun applyVignette(canvas: Canvas, width: Int, height: Int, strength: Int = 45) {
+        if (strength <= 0) return
         val cx = width / 2f
         val cy = height / 2f
         val radius = hypot(cx, cy)
+        val edgeAlpha = (strength * 255 / 100).coerceIn(0, 255)
         val vignettePaint = Paint().apply {
             shader = RadialGradient(
                 cx, cy, radius,
-                intArrayOf(0x00000000, 0x00000000, 0x73000000),
+                intArrayOf(0x00000000, 0x00000000, edgeAlpha shl 24),
                 floatArrayOf(0f, 0.66f, 1f),
                 Shader.TileMode.CLAMP,
             )
@@ -587,7 +669,7 @@ object EblanAlgorithms {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
     }
 
-    fun saveToGallery(context: Context, bitmap: Bitmap): Uri? {
+    fun saveToGallery(context: Context, bitmap: Bitmap, quality: Int = 95): Uri? {
         val name = "EBLAN67_AI_" +
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".jpg"
         val values = ContentValues().apply {
@@ -599,7 +681,7 @@ object EblanAlgorithms {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: return null
         resolver.openOutputStream(uri)?.use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(67, 100), out)
         }
         return uri
     }
