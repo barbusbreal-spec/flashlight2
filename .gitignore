@@ -11,3 +11,7 @@ local.properties
 
 # Keep the Gradle wrapper jar committed (needed for CI builds)
 !gradle/wrapper/gradle-wrapper.jar
+
+# Build outputs (любой вложенный build, включая camera2)
+build/
+camera2/local.properties

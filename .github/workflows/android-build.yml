@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -23,26 +23,66 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
+        run: chmod +x ./gradlew camera2/gradlew
 
-      - name: Build debug + release APK (universal)
+      - name: Build flashlight debug + release APK (universal)
         run: ./gradlew assembleDebug assembleRelease --stacktrace
 
-      - name: Upload debug APK
+      - name: Build EBLAN Camera 67 debug + release APK
+        working-directory: camera2
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
+
+      - name: Upload flashlight debug APK
         uses: actions/upload-artifact@v4
         with:
           name: flashlight2-ultimate-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Upload release APK (unsigned)
+      - name: Upload flashlight release APK (unsigned)
         uses: actions/upload-artifact@v4
         with:
           name: flashlight2-ultimate-release-unsigned
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Upload EBLAN Camera 67 debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: eblan-camera-67-debug
+          path: camera2/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload EBLAN Camera 67 release APK (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: eblan-camera-67-release-unsigned
+          path: camera2/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      # Кладём готовую камерную апк прямо в репу, чтобы качать без танцев
+      # с артефактами. Пуши от GITHUB_TOKEN не перезапускают этот workflow,
+      # так что бесконечного цикла сборок не будет.
+      - name: Commit EBLAN Camera 67 APK back to the branch
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p camera2/apk
+          cp camera2/app/build/outputs/apk/debug/app-debug.apk "camera2/apk/EBLAN-Camera-67-debug.apk"
+          git config user.name "eblan-ci"
+          git config user.email "actions@github.com"
+          git add camera2/apk
+          if git diff --cached --quiet; then
+            echo "APK не поменялась, коммитить нечего ✅"
+            exit 0
+          fi
+          git commit -m "🤖 CI: собран APK EBLAN Camera 67 ✅"
+          for i in 1 2 3; do
+            git push && break
+            git pull --rebase
+          done
