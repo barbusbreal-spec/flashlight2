@@ -74,6 +74,14 @@ jobs:
         run: |
           mkdir -p camera2/apk
           cp camera2/app/build/outputs/apk/debug/app-debug.apk "camera2/apk/EBLAN-Camera-67-debug.apk"
+          # GitHub не принимает файлы >100 МБ — лучше упасть громко здесь,
+          # чем тихо потерять пуш.
+          size=$(stat -c%s "camera2/apk/EBLAN-Camera-67-debug.apk")
+          echo "APK size: $size bytes"
+          if [ "$size" -gt 99000000 ]; then
+            echo "::error::APK больше 99 МБ — GitHub не пустит. Режь ABI/зависимости."
+            exit 1
+          fi
           git config user.name "eblan-ci"
           git config user.email "actions@github.com"
           git add camera2/apk
@@ -83,6 +91,10 @@ jobs:
           fi
           git commit -m "🤖 CI: собран APK EBLAN Camera 67 ✅"
           for i in 1 2 3; do
-            git push && break
+            if git push; then
+              exit 0
+            fi
             git pull --rebase
           done
+          echo "::error::Не смог запушить APK после 3 попыток"
+          exit 1

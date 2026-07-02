@@ -14,6 +14,13 @@ android {
         targetSdk = 34
         versionCode = 67
         versionName = "67.0-eblanHRR"
+
+        // Только arm64: нейронка портретного блюра тащит ~30 МБ нативного
+        // кода на КАЖДУЮ архитектуру, а GitHub не пускает файлы >100 МБ.
+        // Все молодёжные телефоны — arm64, остальным — фонарик.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
