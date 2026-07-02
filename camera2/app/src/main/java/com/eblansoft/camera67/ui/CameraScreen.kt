@@ -4,12 +4,19 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.graphics.PorterDuff
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
+import androidx.camera.core.Camera
+import androidx.camera.core.CameraEffect
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.effects.OverlayEffect
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
@@ -20,9 +27,11 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +41,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,6 +56,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,16 +64,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.eblansoft.camera67.EblanAlgorithms
+import com.eblansoft.camera67.EblanConfig
+import com.eblansoft.camera67.EblanEcosystem
 import com.eblansoft.camera67.Prefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -75,6 +89,12 @@ import java.util.Locale
 /** Бесплатно — минута видео. В премиуме — БЕЗЛИМИТ (тоже минута). ✅ */
 private const val FREE_VIDEO_LIMIT_SEC = 60
 private const val PREMIUM_VIDEO_LIMIT_SEC = 60
+
+/** Ступени зума. Последняя — гордость компании. */
+private val ZOOM_LEVELS = listOf(1f, 2f, 4f, 10f, 67f, 1488f)
+private val ZOOM_LABELS = listOf("1x", "2x", "4x", "10x", "67x", "1488x🚀")
+
+private val TIMER_OPTIONS = listOf(0, 3, 10)
 
 @Composable
 fun CameraScreen(onOpenPremium: () -> Unit) {
@@ -95,9 +115,41 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
     var recording by remember { mutableStateOf<Recording?>(null) }
     var recordSeconds by remember { mutableIntStateOf(0) }
 
+    // Функции 67: зум, таймер, фонарик, сетка и лаг-режимы.
+    var zoomIndex by remember { mutableIntStateOf(0) }
+    var appliedZoom by remember { mutableFloatStateOf(1f) }
+    var timerIndex by remember { mutableIntStateOf(0) }
+    var countdown by remember { mutableIntStateOf(0) }
+    var torchOn by remember { mutableStateOf(false) }
+    var gridOn by remember { mutableStateOf(false) }
+    var night777 by remember { mutableStateOf(false) }
+    var beauty67 by remember { mutableStateOf(false) }
+    var bwDerzkiy by remember { mutableStateOf(false) }
+    var sepiaPacan by remember { mutableStateOf(false) }
+    var fisheye by remember { mutableStateOf(false) }
+    var glitch2007 by remember { mutableStateOf(false) }
+
     val previewView = remember { PreviewView(context) }
+    var camera by remember { mutableStateOf<Camera?>(null) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
+    var overlayEffect by remember { mutableStateOf<OverlayEffect?>(null) }
+
+    fun buildConfig(): EblanConfig {
+        val desired = ZOOM_LEVELS[zoomIndex]
+        val cropFactor = if (appliedZoom > 0f) desired / appliedZoom else 1f
+        return EblanConfig(
+            digitalZoom = cropFactor.coerceAtLeast(1f),
+            night777 = night777,
+            beauty67 = beauty67,
+            bwDerzkiy = bwDerzkiy,
+            sepiaPacan = sepiaPacan,
+            fisheye = fisheye,
+            glitch2007 = glitch2007,
+        )
+    }
+
+    val lagLevel = buildConfig().lagLevel
 
     // Перепривязываем камеру при смене фото/видео или объектива.
     LaunchedEffect(isVideoMode, lensFacing) {
@@ -109,14 +161,36 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
             it.setSurfaceProvider(previewView.surfaceProvider)
         }
         provider.unbindAll()
-        if (isVideoMode) {
+        overlayEffect?.close()
+        overlayEffect = null
+        camera = if (isVideoMode) {
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                 .build()
             val vc = VideoCapture.withOutput(recorder)
             videoCapture = vc
             imageCapture = null
-            provider.bindToLifecycle(lifecycleOwner, selector, preview, vc)
+            // Алгоритмы 8771828fps: оверлей рисует тон, виньетку, плашку AI
+            // и ватермарку прямо в кадры видео в реальном времени.
+            val effect = OverlayEffect(
+                CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE,
+                0,
+                Handler(Looper.getMainLooper()),
+            ) { }
+            effect.setOnDrawListener { frame ->
+                val c = frame.overlayCanvas
+                c.drawColor(android.graphics.Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+                c.setMatrix(android.graphics.Matrix())
+                EblanAlgorithms.drawVideoOverlay(c, c.width, c.height)
+                true
+            }
+            overlayEffect = effect
+            val group = UseCaseGroup.Builder()
+                .addUseCase(preview)
+                .addUseCase(vc)
+                .addEffect(effect)
+                .build()
+            provider.bindToLifecycle(lifecycleOwner, selector, group)
         } else {
             val ic = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
@@ -125,6 +199,21 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
             videoCapture = null
             provider.bindToLifecycle(lifecycleOwner, selector, preview, ic)
         }
+    }
+
+    // Зум: железо крутим до его предела, остальное дорежем алгоритмами.
+    LaunchedEffect(zoomIndex, camera) {
+        val cam = camera ?: return@LaunchedEffect
+        val desired = ZOOM_LEVELS[zoomIndex]
+        val max = cam.cameraInfo.zoomState.value?.maxZoomRatio ?: 1f
+        val real = desired.coerceIn(1f, max)
+        appliedZoom = real
+        cam.cameraControl.setZoomRatio(real)
+    }
+
+    // Фонарик — синергия с Фонарик 2 Ultimate ⚡
+    LaunchedEffect(torchOn, camera) {
+        camera?.cameraControl?.enableTorch(torchOn)
     }
 
     // Таймер записи + принудительный «безлимит на минуте».
@@ -161,6 +250,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
             return
         }
         val capture = imageCapture ?: return
+        val config = buildConfig()
         isProcessing = true
         processingStage = EblanAlgorithms.STAGES.first()
         capture.takePicture(
@@ -176,7 +266,7 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
                         val saved = withContext(Dispatchers.Default) {
                             val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                             val upright = EblanAlgorithms.rotate(raw, rotation)
-                            val masterpiece = EblanAlgorithms.process(upright) { stage ->
+                            val masterpiece = EblanAlgorithms.process(upright, config) { stage ->
                                 processingStage = stage
                             }
                             EblanAlgorithms.saveToGallery(context, masterpiece)
@@ -209,7 +299,8 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         if (active != null) {
             active.stop()
             recording = null
-            statusMessage = "Видео сохранено в галерею ✅🤝"
+            statusMessage = "Видео с алгоритмами ${EblanAlgorithms.VIDEO_FPS_LABEL} " +
+                "и вотеркой сохранено ✅🤝"
             return
         }
         val vc = videoCapture ?: return
@@ -238,14 +329,59 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
         }
     }
 
+    fun onShutterPressed() {
+        if (isVideoMode) {
+            toggleRecording()
+            return
+        }
+        if (countdown > 0) return
+        val timerSec = TIMER_OPTIONS[timerIndex]
+        if (timerSec > 0) {
+            scope.launch {
+                for (t in timerSec downTo 1) {
+                    countdown = t
+                    delay(1000)
+                }
+                countdown = 0
+                takeEblanPhoto()
+            }
+        } else {
+            takeEblanPhoto()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+
+        if (gridOn) {
+            GridOverlay(modifier = Modifier.fillMaxSize())
+        }
 
         TopBar(
             prefs = prefs,
             photosLeft = photosLeft,
+            lagLevel = lagLevel,
+            isVideoMode = isVideoMode,
             isRecording = recording != null,
             recordSeconds = recordSeconds,
+            torchOn = torchOn,
+            gridOn = gridOn,
+            timerSec = TIMER_OPTIONS[timerIndex],
+            onToggleTorch = {
+                torchOn = !torchOn
+                if (torchOn && EblanEcosystem.isFlashlight2Installed(context)) {
+                    statusMessage = "СИНЕРГИЯ с Фонарик 2 Ultimate ⚡🔦 Экосистема работает ✅"
+                }
+            },
+            onToggleGrid = { gridOn = !gridOn },
+            onCycleTimer = { timerIndex = (timerIndex + 1) % TIMER_OPTIONS.size },
+            onOpenFlashlight = {
+                statusMessage = if (EblanEcosystem.openFlashlight2(context)) {
+                    "Открываем Фонарик 2 Ultimate 🔦 Экосистема «Еблан Софт» ✅🤝"
+                } else {
+                    "Фонарик 2 не найден 💀 Поставь второй флагман «Еблан Софт»!"
+                }
+            },
             onOpenPremium = onOpenPremium,
             modifier = Modifier.align(Alignment.TopCenter),
         )
@@ -264,12 +400,40 @@ fun CameraScreen(onOpenPremium: () -> Unit) {
             )
         }
 
+        if (countdown > 0) {
+            Text(
+                "$countdown",
+                modifier = Modifier.align(Alignment.Center),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.displayLarge,
+            )
+        }
+
         BottomBar(
             isVideoMode = isVideoMode,
             isRecording = recording != null,
             isProcessing = isProcessing,
+            zoomIndex = zoomIndex,
+            night777 = night777,
+            beauty67 = beauty67,
+            bwDerzkiy = bwDerzkiy,
+            sepiaPacan = sepiaPacan,
+            fisheye = fisheye,
+            glitch2007 = glitch2007,
+            onZoom = { zoomIndex = it },
+            onToggleEffect = { key ->
+                when (key) {
+                    "night" -> night777 = !night777
+                    "beauty" -> beauty67 = !beauty67
+                    "bw" -> bwDerzkiy = !bwDerzkiy
+                    "sepia" -> sepiaPacan = !sepiaPacan
+                    "fisheye" -> fisheye = !fisheye
+                    "glitch" -> glitch2007 = !glitch2007
+                }
+            },
             onModeChange = { video -> if (recording == null) isVideoMode = video },
-            onShutter = { if (isVideoMode) toggleRecording() else takeEblanPhoto() },
+            onShutter = ::onShutterPressed,
             onSwitchCamera = {
                 if (recording == null) {
                     lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
@@ -336,11 +500,31 @@ private fun Pill(
 }
 
 @Composable
+private fun GridOverlay(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val color = Color.White.copy(alpha = 0.35f)
+        for (f in listOf(1f / 3f, 2f / 3f)) {
+            drawLine(color, Offset(size.width * f, 0f), Offset(size.width * f, size.height), 2f)
+            drawLine(color, Offset(0f, size.height * f), Offset(size.width, size.height * f), 2f)
+        }
+    }
+}
+
+@Composable
 private fun TopBar(
     prefs: Prefs,
     photosLeft: Int,
+    lagLevel: Int,
+    isVideoMode: Boolean,
     isRecording: Boolean,
     recordSeconds: Int,
+    torchOn: Boolean,
+    gridOn: Boolean,
+    timerSec: Int,
+    onToggleTorch: () -> Unit,
+    onToggleGrid: () -> Unit,
+    onCycleTimer: () -> Unit,
+    onOpenFlashlight: () -> Unit,
     onOpenPremium: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -369,12 +553,43 @@ private fun TopBar(
             )
             Pill(text = "📸 $photosLeft/12", bold = true)
         }
-        // Единственный режим. Переключалок нет и не будет — сразу максимум.
-        Pill(
-            text = "✨ AI ${EblanAlgorithms.MODE_NAME} ✅",
-            color = Color(0xB3311B92),
-            bold = true,
-        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Единственный режим. Переключалок нет и не будет — сразу максимум.
+            Pill(
+                text = if (isVideoMode) {
+                    "✨ AI ${EblanAlgorithms.VIDEO_FPS_LABEL} ✅"
+                } else {
+                    "✨ AI ${EblanAlgorithms.MODE_NAME} ✅"
+                },
+                color = Color(0xB3311B92),
+                bold = true,
+            )
+            Pill(
+                text = "⚡LAG LVL $lagLevel",
+                color = if (lagLevel > 0) Color(0xCCB71C1C) else Color(0x99000000),
+                bold = lagLevel > 0,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill(
+                text = if (torchOn) "🔦 ВКЛ" else "🔦",
+                color = if (torchOn) Color(0xCCFFD34D) else Color(0x99000000),
+                textColor = if (torchOn) Color.Black else Color.White,
+                onClick = onToggleTorch,
+            )
+            Pill(
+                text = if (timerSec > 0) "⏱ ${timerSec}с" else "⏱",
+                color = if (timerSec > 0) Color(0xCC7C4DFF) else Color(0x99000000),
+                onClick = onCycleTimer,
+            )
+            Pill(
+                text = if (gridOn) "▦ ✅" else "▦",
+                color = if (gridOn) Color(0xCC7C4DFF) else Color(0x99000000),
+                onClick = onToggleGrid,
+            )
+            // Экосистема «Еблан Софт»: запуск второго флагмана.
+            Pill(text = "🔦Ф2", onClick = onOpenFlashlight)
+        }
         if (isRecording) {
             val limitLabel = if (prefs.isPremium) "БЕЗЛИМИТ (до 1:00) 🤝" else "лимит 1:00"
             Pill(
@@ -393,6 +608,15 @@ private fun BottomBar(
     isVideoMode: Boolean,
     isRecording: Boolean,
     isProcessing: Boolean,
+    zoomIndex: Int,
+    night777: Boolean,
+    beauty67: Boolean,
+    bwDerzkiy: Boolean,
+    sepiaPacan: Boolean,
+    fisheye: Boolean,
+    glitch2007: Boolean,
+    onZoom: (Int) -> Unit,
+    onToggleEffect: (String) -> Unit,
     onModeChange: (Boolean) -> Unit,
     onShutter: () -> Unit,
     onSwitchCamera: () -> Unit,
@@ -406,11 +630,38 @@ private fun BottomBar(
                     listOf(Color.Transparent, Color(0xCC000000))
                 )
             )
-            .padding(top = 28.dp, bottom = 28.dp),
+            .padding(top = 28.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Фото/видео — не режимы, а призвание.
+        // Лаг-режимы: каждый — реальный проход по пикселям. Комбинируй ✅
+        Row(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            EffectPill("🌙 НОЧНОЙ 777", night777) { onToggleEffect("night") }
+            EffectPill("💅 БЬЮТИ 67", beauty67) { onToggleEffect("beauty") }
+            EffectPill("🖤 ЧБ ДЕРЗКИЙ", bwDerzkiy) { onToggleEffect("bw") }
+            EffectPill("📜 СЕПИЯ", sepiaPacan) { onToggleEffect("sepia") }
+            EffectPill("🐟 РЫБИЙ ГЛАЗ", fisheye) { onToggleEffect("fisheye") }
+            EffectPill("📼 ГЛИТЧ 2007", glitch2007) { onToggleEffect("glitch") }
+        }
+        // Зум до 1488x: железо до предела, дальше дорезаем алгоритмами.
+        Row(
+            modifier = Modifier.background(Color(0x66000000), RoundedCornerShape(50)),
+        ) {
+            ZOOM_LABELS.forEachIndexed { i, label ->
+                Pill(
+                    text = label,
+                    color = if (i == zoomIndex) Color(0xE6FFFFFF) else Color.Transparent,
+                    textColor = if (i == zoomIndex) Color.Black else Color.White,
+                    bold = i == zoomIndex,
+                    onClick = { onZoom(i) },
+                )
+            }
+        }
         Row(
             modifier = Modifier.background(Color(0x66000000), RoundedCornerShape(50)),
         ) {
@@ -454,6 +705,16 @@ private fun BottomBar(
             }
         }
     }
+}
+
+@Composable
+private fun EffectPill(text: String, active: Boolean, onClick: () -> Unit) {
+    Pill(
+        text = if (active) "$text ✅" else text,
+        color = if (active) Color(0xCC7C4DFF) else Color(0x99000000),
+        bold = active,
+        onClick = onClick,
+    )
 }
 
 @Composable

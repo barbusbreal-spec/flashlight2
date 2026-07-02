@@ -24,27 +24,39 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
+ * Конфиг съёмки: зум и лаг-режимы. Каждый включённый режим — это ещё один
+ * честный проход по всем пикселям. Больше режимов → больше LAG LVL ⚡.
+ */
+data class EblanConfig(
+    /** Доп. цифровой зум поверх железного (для 1488x — режем пиксели сами). */
+    val digitalZoom: Float = 1f,
+    val night777: Boolean = false,
+    val beauty67: Boolean = false,
+    val bwDerzkiy: Boolean = false,
+    val sepiaPacan: Boolean = false,
+    val fisheye: Boolean = false,
+    val glitch2007: Boolean = false,
+) {
+    val lagLevel: Int
+        get() = listOf(night777, beauty67, bwDerzkiy, sepiaPacan, fisheye, glitch2007)
+            .count { it } + if (digitalZoom > 1.01f) 1 else 0
+}
+
+/**
  * Ядро продукта. Никаких «наложили фильтр и разошлись» — тут настоящая
  * вычислительная фотография уровня:
  *
  *          ✨ AI 777 67 УЛЬТРА++++ ✨
  *
- * Пайплайн гоняет КАЖДЫЙ пиксель через семь этапов, поэтому телефон
- * честно лагает — это не баг, это глубина обработки:
- *
- *  1. Разбор кадра на пиксели и карту яркости.
- *  2. CLAHE — адаптивная эквализация гистограмм по 64 зонам (как в NASA,
- *     только у нас зон больше на вайб).
- *  3. Синтез трёх виртуальных экспозиций (EV-, EV0, EV+) и exposure fusion
- *     по гауссовым весам — тот самый «HDR как у гугла», но в 67 раз честнее.
- *  4. Свёртка резкости: раздельный box-blur + unsharp mask по яркости.
- *  5. Тон-кривая 777 и сочность — по каждому каналу через LUT.
- *  6. AI-глоу (блум SCREEN-наложением) и киношная виньетка.
- *  7. Пометка AI ✨ и вечная ватермарка.
+ * Базовый пайплайн — 7 этапов по каждому пикселю (CLAHE, exposure fusion,
+ * unsharp mask, тон-кривая, глоу, виньетка, ватермарка), плюс бонусные
+ * лаг-режимы: ночной, бьюти, ЧБ, сепия, рыбий глаз, глитч. Телефон честно
+ * лагает — это не баг, это глубина обработки.
  */
 object EblanAlgorithms {
 
     const val MODE_NAME = "777 67 УЛЬТРА++++"
+    const val VIDEO_FPS_LABEL = "8771828fps"
 
     /** Максимум мегапикселей в обработку — чтобы лагало, но не умирало. */
     private const val MAX_PIXELS = 12_500_000
@@ -59,10 +71,21 @@ object EblanAlgorithms {
         "Этап 7/7: пометка AI ✨ и ватермарка 🤝",
     )
 
-    fun process(source: Bitmap, onStage: (String) -> Unit = {}): Bitmap {
+    fun process(
+        source: Bitmap,
+        config: EblanConfig = EblanConfig(),
+        onStage: (String) -> Unit = {},
+    ): Bitmap {
+        // ---------- Зум 1488x: дорезаем пиксели поверх железа ----------
+        var input = source
+        if (config.digitalZoom > 1.01f) {
+            onStage("БОНУС: зум ×%.0f — нарезаем пиксели 🚀".format(config.digitalZoom))
+            input = digitalZoom(input, config.digitalZoom)
+        }
+
         // ---------- Этап 1: пиксели и яркость ----------
         onStage(STAGES[0])
-        val capped = capResolution(source)
+        val capped = capResolution(input)
         val w = capped.width
         val h = capped.height
         val n = w * h
@@ -70,13 +93,13 @@ object EblanAlgorithms {
         capped.getPixels(px, 0, w, 0, 0, w, h)
         if (capped !== source) capped.recycle()
 
-        var luma = ByteArray(n)
-        for (i in 0 until n) {
-            val c = px[i]
-            luma[i] = (((c ushr 16 and 0xFF) * 299 +
-                (c ushr 8 and 0xFF) * 587 +
-                (c and 0xFF) * 114) / 1000).toByte()
+        if (config.night777) {
+            onStage("БОНУС: НОЧНОЙ 777 🌙 вытягиваем тени из подвала")
+            applyNight(px, n)
         }
+
+        var luma = ByteArray(n)
+        fillLuma(px, luma, n)
 
         // ---------- Этап 2: CLAHE ----------
         onStage(STAGES[1])
@@ -88,12 +111,7 @@ object EblanAlgorithms {
 
         // ---------- Этап 4: unsharp mask ----------
         onStage(STAGES[3])
-        for (i in 0 until n) {
-            val c = px[i]
-            luma[i] = (((c ushr 16 and 0xFF) * 299 +
-                (c ushr 8 and 0xFF) * 587 +
-                (c and 0xFF) * 114) / 1000).toByte()
-        }
+        fillLuma(px, luma, n)
         applyUnsharp(px, luma, w, h)
         luma = ByteArray(0) // нейросеть освобождает память как умеет
 
@@ -101,9 +119,32 @@ object EblanAlgorithms {
         onStage(STAGES[4])
         applyToneAndSaturation(px, n)
 
+        // ---------- Бонусные лаг-режимы ----------
+        if (config.bwDerzkiy) {
+            onStage("БОНУС: ЧБ ДЕРЗКИЙ 🖤 цвет для слабых")
+            applyBw(px, n)
+        }
+        if (config.sepiaPacan) {
+            onStage("БОНУС: СЕПИЯ ПАЦАНСКАЯ 📜 как у деда")
+            applySepia(px, n)
+        }
+        if (config.glitch2007) {
+            onStage("БОНУС: ГЛИТЧ 2007 📼 ломаем каналы")
+            applyGlitch(px, w, h)
+        }
+        if (config.fisheye) {
+            onStage("БОНУС: РЫБИЙ ГЛАЗ 🐟 гнём пространство")
+            applyFisheye(px, w, h)
+        }
+
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(px, 0, w, 0, 0, w, h)
         val canvas = Canvas(result)
+
+        if (config.beauty67) {
+            onStage("БОНУС: БЬЮТИ 67 💅 кожа как у младенца")
+            applyBeauty(canvas, result)
+        }
 
         // ---------- Этап 6: глоу + виньетка ----------
         onStage(STAGES[5])
@@ -117,6 +158,38 @@ object EblanAlgorithms {
         return result
     }
 
+    /**
+     * Оверлей для видео: алгоритмы 8771828fps в реальном времени —
+     * тёплый тон, виньетка, плашка AI и вечная ватермарка на каждом кадре.
+     */
+    fun drawVideoOverlay(canvas: Canvas, width: Int, height: Int) {
+        canvas.drawColor(0x12FF9A3D) // тёплый киношный тонировочный слой
+        applyVignette(canvas, width, height)
+        drawAiBadge(canvas, width, height, "AI ✨ $VIDEO_FPS_LABEL")
+        drawWatermark(canvas, width, height)
+    }
+
+    /** Центр-кроп + растяжка обратно: честный цифровой зум. На 1488x — пиксель-арт. */
+    private fun digitalZoom(source: Bitmap, factor: Float): Bitmap {
+        val cw = (source.width / factor).toInt().coerceAtLeast(8)
+        val ch = (source.height / factor).toInt().coerceAtLeast(8)
+        val x = (source.width - cw) / 2
+        val y = (source.height - ch) / 2
+        val crop = Bitmap.createBitmap(source, x, y, cw, ch)
+        val zoomed = Bitmap.createScaledBitmap(crop, source.width, source.height, true)
+        if (crop !== zoomed) crop.recycle()
+        return zoomed
+    }
+
+    private fun fillLuma(px: IntArray, luma: ByteArray, n: Int) {
+        for (i in 0 until n) {
+            val c = px[i]
+            luma[i] = (((c ushr 16 and 0xFF) * 299 +
+                (c ushr 8 and 0xFF) * 587 +
+                (c and 0xFF) * 114) / 1000).toByte()
+        }
+    }
+
     private fun capResolution(source: Bitmap): Bitmap {
         val n = source.width.toLong() * source.height
         if (n <= MAX_PIXELS) return source
@@ -127,6 +200,98 @@ object EblanAlgorithms {
             (source.height * scale).toInt().coerceAtLeast(1),
             true,
         )
+    }
+
+    /** НОЧНОЙ 777: гамма-лифт теней по LUT — как ночной режим, только наш. */
+    private fun applyNight(px: IntArray, n: Int) {
+        val lut = IntArray(256)
+        for (v in 0 until 256) {
+            lut[v] = (255f * (v / 255f).pow(0.72f)).toInt().coerceIn(0, 255)
+        }
+        for (i in 0 until n) {
+            val c = px[i]
+            px[i] = (c and 0xFF000000.toInt()) or
+                (lut[c ushr 16 and 0xFF] shl 16) or
+                (lut[c ushr 8 and 0xFF] shl 8) or
+                lut[c and 0xFF]
+        }
+    }
+
+    /** ЧБ ДЕРЗКИЙ: моно + жёсткий контраст. */
+    private fun applyBw(px: IntArray, n: Int) {
+        for (i in 0 until n) {
+            val c = px[i]
+            val l = ((c ushr 16 and 0xFF) * 299 +
+                (c ushr 8 and 0xFF) * 587 +
+                (c and 0xFF) * 114) / 1000
+            val v = (((l - 128) * 118) / 100 + 128).coerceIn(0, 255)
+            px[i] = (c and 0xFF000000.toInt()) or (v shl 16) or (v shl 8) or v
+        }
+    }
+
+    /** СЕПИЯ ПАЦАНСКАЯ: классическая матрица, тёплая как чифир. */
+    private fun applySepia(px: IntArray, n: Int) {
+        for (i in 0 until n) {
+            val c = px[i]
+            val r = c ushr 16 and 0xFF
+            val g = c ushr 8 and 0xFF
+            val b = c and 0xFF
+            val nr = ((r * 393 + g * 769 + b * 189) / 1000).coerceAtMost(255)
+            val ng = ((r * 349 + g * 686 + b * 168) / 1000).coerceAtMost(255)
+            val nb = ((r * 272 + g * 534 + b * 131) / 1000).coerceAtMost(255)
+            px[i] = (c and 0xFF000000.toInt()) or (nr shl 16) or (ng shl 8) or nb
+        }
+    }
+
+    /** ГЛИТЧ 2007: красный канал влево, синий вправо — VHS у бабушки. */
+    private fun applyGlitch(px: IntArray, w: Int, h: Int) {
+        val shift = (w / 160).coerceAtLeast(3)
+        val src = px.copyOf()
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val i = row + x
+                val r = src[row + (x + shift).coerceAtMost(w - 1)] ushr 16 and 0xFF
+                val g = src[i] ushr 8 and 0xFF
+                val b = src[row + (x - shift).coerceAtLeast(0)] and 0xFF
+                px[i] = (src[i] and 0xFF000000.toInt()) or (r shl 16) or (g shl 8) or b
+            }
+        }
+    }
+
+    /** РЫБИЙ ГЛАЗ: бочковая дисторсия — полный ремап всех пикселей. Лагает изысканно. */
+    private fun applyFisheye(px: IntArray, w: Int, h: Int) {
+        val src = px.copyOf()
+        val cx = w / 2f
+        val cy = h / 2f
+        val k = 0.55f
+        for (y in 0 until h) {
+            val ny = (y - cy) / cy
+            val row = y * w
+            for (x in 0 until w) {
+                val nx = (x - cx) / cx
+                val r2 = nx * nx + ny * ny
+                val d = 1f + k * r2
+                val sx = (cx + nx * cx * d).toInt().coerceIn(0, w - 1)
+                val sy = (cy + ny * cy * d).toInt().coerceIn(0, h - 1)
+                px[row + x] = src[sy * w + sx]
+            }
+        }
+    }
+
+    /** БЬЮТИ 67: мягкий слой (даунскейл ×4 → апскейл) поверх — кожа шёлк. */
+    private fun applyBeauty(canvas: Canvas, result: Bitmap) {
+        val sw = (result.width / 4).coerceAtLeast(1)
+        val sh = (result.height / 4).coerceAtLeast(1)
+        val soft = Bitmap.createScaledBitmap(result, sw, sh, true)
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 115 }
+        canvas.drawBitmap(
+            soft,
+            Rect(0, 0, sw, sh),
+            Rect(0, 0, result.width, result.height),
+            paint,
+        )
+        soft.recycle()
     }
 
     /**
@@ -364,13 +529,12 @@ object EblanAlgorithms {
     }
 
     /** Пометка AI ✨ в правом верхнем углу — молодёжно, как у гуглов и самсунгов. */
-    private fun drawAiBadge(canvas: Canvas, width: Int, height: Int) {
+    private fun drawAiBadge(canvas: Canvas, width: Int, height: Int, label: String = "AI ✨ 67") {
         val textSize = (width.coerceAtMost(height)) / 24f
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             this.textSize = textSize
             isFakeBoldText = true
         }
-        val label = "AI ✨ 67"
         val textWidth = paint.measureText(label)
         val padH = textSize * 0.7f
         val padV = textSize * 0.45f

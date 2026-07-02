@@ -11,6 +11,17 @@
         android:name="android.hardware.camera.any"
         android:required="true" />
 
+    <!-- Экосистема «Еблан Софт»: камера должна видеть Фонарик 2 Ultimate,
+         чтобы синергия работала (Android 11+ package visibility). -->
+    <queries>
+        <package android:name="com.eblansoft.flashlight2" />
+        <package android:name="com.eblansoft.flashlight2.debug" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="flashlight" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
