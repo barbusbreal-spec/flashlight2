@@ -139,6 +139,8 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
     var sepiaPacan by remember { mutableStateOf(false) }
     var fisheye by remember { mutableStateOf(false) }
     var glitch2007 by remember { mutableStateOf(false) }
+    var portraitBlur by remember { mutableStateOf(false) }
+    var stab777 by remember { mutableStateOf(true) }
 
     val previewView = remember { PreviewView(context) }
     var camera by remember { mutableStateOf<Camera?>(null) }
@@ -157,6 +159,7 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
             sepiaPacan = sepiaPacan,
             fisheye = fisheye,
             glitch2007 = glitch2007,
+            portraitBlur = portraitBlur,
             juiciness = prefs.juiciness,
             sharpness = prefs.sharpness,
             glowAlpha = prefs.glowAlpha,
@@ -167,15 +170,22 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
 
     val lagLevel = buildConfig().lagLevel
 
-    // Перепривязываем камеру при смене фото/видео или объектива.
-    LaunchedEffect(isVideoMode, lensFacing) {
+    // Перепривязываем камеру при смене фото/видео, объектива или стаба 777.
+    LaunchedEffect(isVideoMode, lensFacing, stab777) {
         recording?.stop()
         recording = null
         val provider = context.cameraProvider()
         val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
-        val preview = Preview.Builder().build().also {
-            it.setSurfaceProvider(previewView.surfaceProvider)
-        }
+        val preview = Preview.Builder()
+            .apply {
+                // СТАБИЛИЗАЦИЯ 777: железная стабилизация превью, если умеет.
+                if (isVideoMode && stab777) {
+                    runCatching { setPreviewStabilizationEnabled(true) }
+                }
+            }
+            .build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
         provider.unbindAll()
         overlayEffect?.close()
         overlayEffect = null
@@ -183,7 +193,13 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
                 .build()
-            val vc = VideoCapture.withOutput(recorder)
+            // СТАБИЛИЗАЦИЯ 777: настоящая видеостабилизация через CameraX.
+            // Если железо не умеет — камера просто пожмёт плечами.
+            val vc = VideoCapture.Builder(recorder)
+                .apply {
+                    if (stab777) runCatching { setVideoStabilizationEnabled(true) }
+                }
+                .build()
             videoCapture = vc
             imageCapture = null
             // Алгоритмы 8771828fps: оверлей рисует тон, виньетку, плашку AI
@@ -457,6 +473,8 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
             sepiaPacan = sepiaPacan,
             fisheye = fisheye,
             glitch2007 = glitch2007,
+            portraitBlur = portraitBlur,
+            stab777 = stab777,
             onZoom = { zoomIndex = it },
             onToggleEffect = { key ->
                 when (key) {
@@ -466,6 +484,21 @@ fun CameraScreen(onOpenPremium: () -> Unit, onOpenSettings: () -> Unit) {
                     "sepia" -> sepiaPacan = !sepiaPacan
                     "fisheye" -> fisheye = !fisheye
                     "glitch" -> glitch2007 = !glitch2007
+                    "portrait" -> {
+                        portraitBlur = !portraitBlur
+                        if (portraitBlur) {
+                            statusMessage = "ПОРТРЕТ БЛЮР 🌫 нейронка отделит " +
+                                "красавчика от фона (даже если камера говно ✅)"
+                        }
+                    }
+                    "stab" -> {
+                        stab777 = !stab777
+                        statusMessage = if (stab777) {
+                            "СТАБИЛИЗАЦИЯ 777 🎯 видео — железом, фото — стеком ✅✅✅"
+                        } else {
+                            "Стаб 777 выключен, снимай с рук как мужик 💪"
+                        }
+                    }
                 }
             },
             onModeChange = { video -> if (recording == null) isVideoMode = video },
@@ -660,6 +693,8 @@ private fun BottomBar(
     sepiaPacan: Boolean,
     fisheye: Boolean,
     glitch2007: Boolean,
+    portraitBlur: Boolean,
+    stab777: Boolean,
     onZoom: (Int) -> Unit,
     onToggleEffect: (String) -> Unit,
     onModeChange: (Boolean) -> Unit,
@@ -694,6 +729,8 @@ private fun BottomBar(
                 bold = true,
                 onClick = onToggleMeme,
             )
+            EffectPill("🌫 ПОРТРЕТ БЛЮР", portraitBlur) { onToggleEffect("portrait") }
+            EffectPill("🎯 СТАБ 777", stab777) { onToggleEffect("stab") }
             EffectPill("🌙 НОЧНОЙ 777", night777) { onToggleEffect("night") }
             EffectPill("💅 БЬЮТИ 67", beauty67) { onToggleEffect("beauty") }
             EffectPill("🖤 ЧБ ДЕРЗКИЙ", bwDerzkiy) { onToggleEffect("bw") }

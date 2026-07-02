@@ -70,5 +70,9 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.camera:camera-effects:$cameraxVersion")
 
+    // Нейронка для портретного блюра: отделяет красавчика от фона,
+    // даже если камера — говно. Модель в комплекте, интернет не нужен.
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

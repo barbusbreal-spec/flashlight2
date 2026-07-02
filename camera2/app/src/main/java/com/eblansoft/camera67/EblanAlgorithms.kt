@@ -36,6 +36,8 @@ data class EblanConfig(
     val sepiaPacan: Boolean = false,
     val fisheye: Boolean = false,
     val glitch2007: Boolean = false,
+    /** Портретный блюр фона: нейронка MLKit + фолбэк для камер-говн. */
+    val portraitBlur: Boolean = false,
     // Крутилки ебейшести из настроек:
     val juiciness: Int = 155,   // сочность, %
     val sharpness: Int = 86,    // резкость, %
@@ -44,7 +46,7 @@ data class EblanConfig(
     val warmth: Int = 3,        // теплота, -10..10
 ) {
     val lagLevel: Int
-        get() = listOf(night777, beauty67, bwDerzkiy, sepiaPacan, fisheye, glitch2007)
+        get() = listOf(night777, beauty67, bwDerzkiy, sepiaPacan, fisheye, glitch2007, portraitBlur)
             .count { it } + if (digitalZoom > 1.01f) 1 else 0
 }
 
@@ -207,6 +209,11 @@ object EblanAlgorithms {
         val result = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         result.setPixels(px, 0, w, 0, 0, w, h)
         val canvas = Canvas(result)
+
+        if (config.portraitBlur) {
+            onStage("БОНУС: ПОРТРЕТ БЛЮР 🌫 отделяем красавчика от фона")
+            applyPortraitBlur(canvas, result)
+        }
 
         if (config.beauty67) {
             onStage("БОНУС: БЬЮТИ 67 💅 кожа как у младенца")
@@ -465,6 +472,107 @@ object EblanAlgorithms {
                 val sy = (cy + ny * cy * d).toInt().coerceIn(0, h - 1)
                 px[row + x] = src[sy * w + sx]
             }
+        }
+    }
+
+    /**
+     * ПОРТРЕТ БЛЮР 🌫: фон в мыло, красавчик резкий. Сначала пробуем
+     * нейронку (MLKit selfie segmentation, модель в комплекте). Если
+     * нейронка человека не нашла или камера совсем говно — фолбэк:
+     * резкий центр, кинематографичное мыло по краям. Боке из ничего.
+     */
+    private fun applyPortraitBlur(canvas: Canvas, src: Bitmap) {
+        val w = src.width
+        val h = src.height
+
+        // Жёсткий блюр фона: даунскейл в 12 раз и обратно.
+        val bw = (w / 12).coerceAtLeast(1)
+        val bh = (h / 12).coerceAtLeast(1)
+        val small = Bitmap.createScaledBitmap(src, bw, bh, true)
+        val blurred = Bitmap.createScaledBitmap(small, w, h, true)
+        small.recycle()
+
+        // Слой фона: блюр, у которого альфа = «это фон» (человек прозрачен).
+        val layer = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val layerCanvas = Canvas(layer)
+        layerCanvas.drawBitmap(blurred, 0f, 0f, null)
+        blurred.recycle()
+
+        val aiMask = runCatching { buildAiBackgroundMask(src) }.getOrNull()
+        if (aiMask != null) {
+            val maskPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            }
+            layerCanvas.drawBitmap(
+                aiMask,
+                Rect(0, 0, aiMask.width, aiMask.height),
+                Rect(0, 0, w, h),
+                maskPaint,
+            )
+            aiMask.recycle()
+        } else {
+            // Камера-говно эдишн: нейронка не нашла человека — крутим
+            // радиальное боке. Центр резкий, края в мыло. Тоже красиво.
+            val radial = Paint().apply {
+                shader = RadialGradient(
+                    w / 2f, h / 2f,
+                    (w.coerceAtLeast(h)) * 0.62f,
+                    intArrayOf(0x00000000, 0x00000000, 0xE6000000.toInt()),
+                    floatArrayOf(0f, 0.42f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            }
+            layerCanvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), radial)
+        }
+        canvas.drawBitmap(layer, 0f, 0f, null)
+        layer.recycle()
+    }
+
+    /**
+     * MLKit selfie segmentation → альфа-маска фона (255 = фон, 0 = красавчик).
+     * Сегментируем уменьшенную копию — нейронке хватает, а лаг экономим
+     * для бурмалды.
+     */
+    private fun buildAiBackgroundMask(src: Bitmap): Bitmap? {
+        val scale = 512f / maxOf(src.width, src.height)
+        val sw = (src.width * scale).toInt().coerceAtLeast(64)
+        val sh = (src.height * scale).toInt().coerceAtLeast(64)
+        val smallSrc = Bitmap.createScaledBitmap(src, sw, sh, true)
+        val segmenter = com.google.mlkit.vision.segmentation.Segmentation.getClient(
+            com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions.Builder()
+                .setDetectorMode(
+                    com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions.SINGLE_IMAGE_MODE
+                )
+                .build()
+        )
+        return try {
+            val mask = com.google.android.gms.tasks.Tasks.await(
+                segmenter.process(
+                    com.google.mlkit.vision.common.InputImage.fromBitmap(smallSrc, 0)
+                ),
+                10, java.util.concurrent.TimeUnit.SECONDS,
+            )
+            val mw = mask.width
+            val mh = mask.height
+            val buf = mask.buffer
+            buf.rewind()
+            val pxm = IntArray(mw * mh)
+            var personPixels = 0
+            for (i in 0 until mw * mh) {
+                val confidence = buf.float // насколько это красавчик, 0..1
+                if (confidence > 0.5f) personPixels++
+                pxm[i] = (((1f - confidence) * 255).toInt().coerceIn(0, 255)) shl 24
+            }
+            // Человека в кадре меньше 1%? Нейронка честно говорит «не нашла».
+            if (personPixels < mw * mh / 100) {
+                null
+            } else {
+                Bitmap.createBitmap(pxm, mw, mh, Bitmap.Config.ARGB_8888)
+            }
+        } finally {
+            smallSrc.recycle()
+            segmenter.close()
         }
     }
 
